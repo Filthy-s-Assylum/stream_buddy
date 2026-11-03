@@ -12,3 +12,4 @@ captures/
 *.keystore
 .env
 opencode-termux.sh
+dist/
