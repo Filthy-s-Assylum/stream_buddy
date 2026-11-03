@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Foreground: a play triangle (the player) sitting on three stacked "cache" bars.
+  Everything stays inside the 72dp safe zone of the 108dp adaptive canvas.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#4FA3FF"
+        android:pathData="M46,34 L76,54 L46,74 Z" />
+    <path
+        android:fillColor="#6FD3A8"
+        android:pathData="M36,62 h44 v6 h-44 z" />
+    <path
+        android:fillColor="#6FD3A8"
+        android:fillAlpha="0.7"
+        android:pathData="M36,72 h44 v6 h-44 z" />
+    <path
+        android:fillColor="#6FD3A8"
+        android:fillAlpha="0.4"
+        android:pathData="M36,82 h44 v6 h-44 z" />
+</vector>

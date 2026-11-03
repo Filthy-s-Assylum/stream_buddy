@@ -10,6 +10,11 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // FrostWire publishes jlibtorrent here; harmless if Maven Central already has it.
+        maven {
+            url = uri("https://dl.frostwire.com/maven")
+            content { includeGroup("com.frostwire") }
+        }
     }
 }
 rootProject.name = "stream_buddy"

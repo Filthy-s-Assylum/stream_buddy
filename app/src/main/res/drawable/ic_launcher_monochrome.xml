@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Themed-icon variant (Android 13+): single colour, same silhouette. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M46,30 L78,52 L46,74 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,78 h40 v7 h-40 z" />
+</vector>

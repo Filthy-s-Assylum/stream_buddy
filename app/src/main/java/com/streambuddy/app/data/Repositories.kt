@@ -17,8 +17,8 @@ class StreamRepository(
         infoHash: String? = null,
     ): Long = dao.insert(
         StreamEntity(
-            title = EncryptedString(title.trim().ifBlank { "Untitled" }),
-            uri = EncryptedString(uri.trim()),
+            title = title.trim().ifBlank { "Untitled" },
+            url = uri.trim(),
             kind = kind.name,
             mode = mode.name,
             addedAt = System.currentTimeMillis(),
@@ -39,8 +39,8 @@ class StreamRepository(
 
     private fun toItem(row: StreamEntity) = StreamItem(
         id = row.id,
-        title = row.title.value,
-        uri = row.uri.value,
+        title = row.title,
+        uri = row.url,
         kind = runCatching { StreamKind.valueOf(row.kind) }.getOrDefault(StreamKind.MP4),
         mode = runCatching { PlaybackMode.valueOf(row.mode) }.getOrDefault(PlaybackMode.WATCH_NOW),
         addedAt = row.addedAt,

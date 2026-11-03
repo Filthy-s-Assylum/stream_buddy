@@ -1,12 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  HLS/DASH endpoints are frequently served over plain HTTP (local media servers,
+  self-hosted libraries, carrier CDNs). Playback of http:// URLs therefore has to be
+  permitted for the player to work. Traffic is only fetched for URLs the user adds.
+-->
 <network-security-config>
-    <!--
-      Media URLs are supplied by the user and some HLS/DASH origins are still
-      HTTP-only. Stream Buddy warns before using cleartext media and never
-      sends app secrets over the network. The only built-in cleartext endpoint
-      is the loopback streaming server, bound to 127.0.0.1 and protected by a
-      per-session token.
-    -->
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />

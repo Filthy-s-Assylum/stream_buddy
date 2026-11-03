@@ -13,15 +13,20 @@ import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverter
-import androidx.room.TypeConverters
 import androidx.room.Update
 import com.streambuddy.app.core.security.AppCrypto
+import com.streambuddy.app.stream.CacheState
+import com.streambuddy.app.util.Format
 import kotlinx.coroutines.flow.Flow
 
-/**
+/** 
  * Room writes the value through [SecretConverters], which encrypts every
  * user-supplied string with AES-256-GCM before it reaches SQLite.
- */
+ *
+ * The `streams` table itself stores plain [String] titles/URLs so that both the
+ * pre-cache engine and the library layer read the same columns; the playback
+ * session and library tables below keep the encrypted representation.
+ */ 
 data class EncryptedString(val value: String)
 
 class SecretConverters {
@@ -34,21 +39,59 @@ class SecretConverters {
         value?.let { EncryptedString(AppCrypto.decryptOrNull(it) ?: "") }
 }
 
+/** 
+ * One entry of the pre-play queue.
+ *
+ * The schema is the union of both histories: the pre-cache engine drives
+ * [state]/[prefetchMillis] and the progress columns, while the library and
+ * download layer drives [mode]/[lastPlayedAt]/[downloadId]/[infoHash].
+ * [state] and [kind] are stored as enum names (Room has no built-in enum support).
+ */ 
 @Entity(tableName = "streams", indices = [Index("lastPlayedAt")])
 data class StreamEntity(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val title: EncryptedString,
-    val uri: EncryptedString,
-    val kind: String,
-    val mode: String,
-    val addedAt: Long,
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val title: String,
+    /** The stream URL, or a `magnet:` link for torrent entries. */
+    val url: String,
+    val kind: String = com.streambuddy.app.stream.StreamKind.UNKNOWN.name,
+    val mode: String = com.streambuddy.app.ui.PlaybackMode.WATCH_NOW.name,
+    val state: String = com.streambuddy.app.cache.CacheState.QUEUED.name,
+    val addedAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis(),
     val lastPlayedAt: Long? = null,
-    val cachedBytes: Long = 0,
+    val cachedBytes: Long = 0L,
+    val totalBytes: Long = 0L,
+    val cachedMillis: Long = 0L,
+    val totalMillis: Long = 0L,
+    val prefetchMillis: Long = 0L,
+    val error: String? = null,
     val downloadId: String? = null,
     val infoHash: String? = null,
-)
+) {
+    val streamKind: com.streambuddy.app.stream.StreamKind
+        get() = com.streambuddy.app.stream.StreamKind.fromName(kind)
 
-@Entity(tableName = "playback_sessions", indices = [Index("startedAt"), Index("policy")])
+    val cacheState: com.streambuddy.app.cache.CacheState get() = 
+        com.streambuddy.app.cache.CacheState.fromName(state)
+
+    /** Percentage of the requested pre-play window (or whole file) that is cached. */
+    val progressPercent: Int?
+        get() = when {
+            totalMillis > 0L -> Format.percent(cachedMillis, totalMillis)
+            totalBytes > 0L -> Format.percent(cachedBytes, totalBytes)
+            else -> null
+        }
+
+    /** `2:00 of 12:34 cached`, `48.2 MB cached`, ... */
+    val progressDetail: String
+        get() = when {
+            totalMillis > 0L -> "${Format.duration(cachedMillis)} of ${Format.duration(totalMillis)} cached"
+            cachedBytes > 0L -> "${Format.bytes(cachedBytes)} cached"
+            else -> "Nothing cached yet"
+        }
+}
+
+/@Entity(tableName = "playback_sessions", indices = [Index("startedAt"), Index("policy")])
 data class PlaybackSessionEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val title: EncryptedString,
@@ -98,8 +141,15 @@ interface StreamDao {
     @Query("SELECT * FROM streams ORDER BY COALESCE(lastPlayedAt, addedAt) DESC")
     fun observeAll(): Flow<List<StreamEntity>>
 
+    /** One-shot read for the predictor, which ranks on a worker thread. */
+    @Query("SELECT * FROM streams ORDER BY addedAt DESC")
+    suspend fun allOnce(): List<StreamEntity>
+
     @Query("SELECT * FROM streams WHERE id = :id")
     suspend fun find(id: Long): StreamEntity?
+
+    @Query("SELECT * FROM streams WHERE id = :id LIMIT 1")
+    suspend fun findById(id: Long): StreamEntity?
 
     @Insert
     suspend fun insert(stream: StreamEntity): Long
@@ -118,7 +168,41 @@ interface StreamDao {
 
     @Query("UPDATE streams SET downloadId = :downloadId WHERE id = :id")
     suspend fun updateDownloadId(id: Long, downloadId: String?)
-}
+
+    @Query(
+        "UPDATE streams SET state = :state, error = :error, updatedAt = :now WHERE id = :id"
+    )
+    suspend fun updateState(id: Long, state: String, error: String?, now: Long)
+
+    @Query(
+        """UPDATE streams SET
+            state = :state,
+            cachedBytes = :cachedBytes,
+            totalBytes = :totalBytes,
+            cachedMillis = :cachedMillis,
+            totalMillis = :totalMillis,
+            prefetchMillis = :prefetchMillis,
+            error = :error,
+            updatedAt = :now
+        WHERE id = :id"""
+    )
+    suspend fun updateProgress(
+        id: Long,
+        state: String,
+        cachedBytes: Long,
+        totalBytes: Long,
+        cachedMillis: Long,
+        totalMillis: Long,
+        prefetchMillis: Long,
+        error: String?,
+        now: Long
+    )
+
+    @Query(
+        "UPDATE streams SET prefetchMillis = :prefetchMillis, state = :state, error = NULL, updatedAt = :now WHERE id = :id"
+    )
+    suspend fun resetForCaching(id: Long, prefetchMillis: Long, state: String, now: Long)
+)
 
 @Dao
 interface SessionDao {
@@ -144,22 +228,37 @@ interface RiskSampleDao {
     suspend fun labelledCount(): Int
 
     @Query("SELECT * FROM risk_samples ORDER BY createdAt DESC LIMIT :limit")
-    fun observeRecent(limit: Int): Flow<List<RiskSampleEntity>>
-}
+    fun observeRecent(limit: Int): Flow<List<RiskSampleEntity>}
+)
 
+/** 
+ * Pre-1.0 union of both histories: [StreamEntity]/[SessionDao]/[RiskSampleDao]/[LibraryDao]
+ * from the library and optimizer side, [WatchDao] from the pre-cache predictor side.
+ *
+ * There is no shipped version to migrate from, so a fresh database is acceptable.
+ */ 
 @Database(
-    entities = [StreamEntity::class, PlaybackSessionEntity::class, RiskSampleEntity::class, LibraryEntity::class],
-    version = 3,
-    exportSchema = true,
+    entities = [
+        StreamEntity::class,
+        PlaybackSessionEntity::class,
+        RiskSampleEntity::class,
+        com.streambuddy.app.data.LibraryEntity::class,
+        com.streambuddy.app.data.WatchEntity::class,
+    ],
+    version = 4,
+    exportSchema = false,
 )
 @TypeConverters(SecretConverters::class)
 abstract class AppDb : RoomDatabase() {
     abstract fun streams(): StreamDao
     abstract fun sessions(): SessionDao
     abstract fun riskSamples(): RiskSampleDao
-    abstract fun library(): LibraryDao
+    abstract fun library(): com.streambuddy.app.data.LibraryDao
+    abstract fun watchHistory(): com.streambuddy.app.data.WatchDao
 
     companion object {
+        private const val DB_NAME = "streambuddy.db"
+
         @Volatile
         private var instance: AppDb? = null
 
@@ -167,11 +266,8 @@ abstract class AppDb : RoomDatabase() {
             instance ?: Room.databaseBuilder(
                 context.applicationContext,
                 AppDb::class.java,
-                "streambuddy.db",
+                DB_NAME,
             )
-                // The original scaffold shipped an unrelated v1 schema and was
-                // never released. User content lives in encrypted fields; a
-                // schema reset only removes the empty scaffold tables.
                 .fallbackToDestructiveMigration()
                 .build()
                 .also { instance = it }

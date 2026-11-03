@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launcher icon background: the same near-black the app uses, with a subtle glow. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#0D1117"
+        android:pathData="M0,0h108v108h-108z" />
+    <path
+        android:fillColor="#16324F"
+        android:fillAlpha="0.55"
+        android:pathData="M54,12m-38,0a38,38 0,1 1,76 0a38,38 0,1 1,-76 0" />
+</vector>

@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 import java.util.Base64
+=======
+import java.util.Properties
+>>>>>>> origin/main
 
 plugins {
     id("com.android.application")
@@ -8,6 +12,7 @@ plugins {
 }
 
 /**
+<<<<<<< HEAD
  * Reads an optional repository-root .env file. .env is git-ignored and must
  * never be committed. Real environment variables win, which lets CI pass the
  * key from a GitHub secret without writing a file.
@@ -102,17 +107,49 @@ val buildTimeMotnKey = firstNonBlank(
     dotEnv["MOTN_API_KEY"],
     dotEnv["MOVIE_OF_THE_NIGHT_KEY"],
 )
+=======
+ * Release signing is configured from `keystore.properties` (untracked) or, in CI, from
+ * environment variables. Without either, `assembleRelease` still runs and produces an unsigned
+ * APK — convenient for CI, but such a build cannot be installed over a signed one.
+ *
+ *   STREAMBUDDY_KEYSTORE       path to the .jks
+ *   STREAMBUDDY_KEYSTORE_PASS  store password
+ *   STREAMBUDDY_KEY_ALIAS      key alias
+ *   STREAMBUDDY_KEY_PASS       key password
+ */
+val keystoreProperties = Properties().apply {
+    val file = rootProject.file("keystore.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+
+fun signingValue(property: String, env: String): String? =
+    keystoreProperties.getProperty(property) ?: System.getenv(env)
+
+val releaseStoreFile = signingValue("storeFile", "STREAMBUDDY_KEYSTORE")
+val releaseStorePassword = signingValue("storePassword", "STREAMBUDDY_KEYSTORE_PASS")
+val releaseKeyAlias = signingValue("keyAlias", "STREAMBUDDY_KEY_ALIAS")
+val releaseKeyPassword = signingValue("keyPassword", "STREAMBUDDY_KEY_PASS")
+val hasReleaseSigning = listOf(
+    releaseStoreFile,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { !it.isNullOrBlank() }
+>>>>>>> origin/main
 
 android {
     namespace = "com.streambuddy.app"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.streambuddy.app"
-        minSdk = 24
-        targetSdk = 34
+        // 26 is the floor set by libtorrent's prebuilt native library (Android 8.0, 2017).
+        minSdk = 26
+        // Play requires targeting a recent API level; 35 is also enforced edge-to-edge.
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0.0"
+<<<<<<< HEAD
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -120,6 +157,47 @@ android {
             // libtorrent4j publishes one native library per ABI. A debug APK is
             // universal so it can be installed on phones and emulators.
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+=======
+        vectorDrawables.useSupportLibrary = true
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // libtorrent ships a native library per ABI. Shipping only the two that matter keeps the
+        // APK ~40 MB smaller; Play's app bundle splits per device anyway.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
+    }
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseStoreFile!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+                enableV1Signing = true
+                enableV2Signing = true
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            isMinifyEnabled = false
+        }
+        release {
+            // R8 is on: the keep rules for Room, WorkManager, Media3 and OkHttp live in
+            // app/proguard-rules.pro, and the CI build compiles this variant on every run.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+>>>>>>> origin/main
         }
     }
 
@@ -130,7 +208,13 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
+<<<<<<< HEAD
         freeCompilerArgs += listOf("-opt-in=kotlin.RequiresOptIn")
+=======
+        // Media3 marks most of its cache/datasource API @UnstableApi (opt-in level ERROR).
+        // Every call site is also annotated; this keeps the build safe if one is missed.
+        freeCompilerArgs += listOf("-opt-in=androidx.media3.common.util.UnstableApi")
+>>>>>>> origin/main
     }
 
     buildFeatures {
@@ -138,6 +222,7 @@ android {
         buildConfig = true
     }
 
+<<<<<<< HEAD
     signingConfigs {
         if (releaseSigningConfigured) {
             create("release") {
@@ -197,6 +282,18 @@ android {
         jniLibs {
             useLegacyPackaging = false
         }
+=======
+    packaging {
+        resources {
+            excludes += setOf(
+                "/META-INF/{AL2.0,LGPL2.1}",
+                "/META-INF/DEPENDENCIES",
+                "/META-INF/LICENSE*",
+                "/META-INF/NOTICE*",
+                "/META-INF/*.kotlin_module",
+            )
+        }
+>>>>>>> origin/main
     }
 
     testOptions {
@@ -204,6 +301,7 @@ android {
     }
 
     lint {
+<<<<<<< HEAD
         abortOnError = false
     }
 }
@@ -266,10 +364,21 @@ tasks.register("verifyReleaseSigned") {
             }
         }
         logger.lifecycle("Release APK ready: ${release.joinToString { it.absolutePath }}")
+=======
+        // Treat lint errors as build failures, but do not fail on the warning backlog.
+        abortOnError = true
+        warningsAsErrors = false
+        checkReleaseBuilds = false
+        // Plain-text report so CI can surface every error as a check annotation.
+        textReport = true
+        textOutput = File(project.layout.buildDirectory.get().asFile, "reports/lint-results-debug.txt")
+        disable += setOf("AndroidGradlePluginVersion", "GradleDependency", "NewerVersionAvailable")
+>>>>>>> origin/main
     }
 }
 
 dependencies {
+<<<<<<< HEAD
     val media3 = "1.4.1"
     val composeBom = platform("androidx.compose:compose-bom:2024.09.00")
 
@@ -278,19 +387,39 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.3")
     implementation("androidx.lifecycle:lifecycle-service:2.8.3")
 
+=======
+    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.activity:activity-compose:1.9.2")
+    implementation("androidx.activity:activity-ktx:1.9.2")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.3")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.3")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.3")
+
+    // Compose
+    val composeBom = platform("androidx.compose:compose-bom:2024.09.00")
+>>>>>>> origin/main
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.compose.runtime:runtime")
+<<<<<<< HEAD
+=======
+    implementation("androidx.navigation:navigation-compose:2.8.0")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+>>>>>>> origin/main
 
+    // Persistence
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
 
+    // Background pre-caching
     implementation("androidx.work:work-runtime-ktx:2.9.1")
 
+<<<<<<< HEAD
     implementation("androidx.media3:media3-common:$media3")
     implementation("androidx.media3:media3-exoplayer:$media3")
     implementation("androidx.media3:media3-exoplayer-hls:$media3")
@@ -300,9 +429,26 @@ dependencies {
     implementation("androidx.media3:media3-datasource-okhttp:$media3")
     implementation("androidx.media3:media3-database:$media3")
     implementation("androidx.media3:media3-session:$media3")
+=======
+    // Media playback + on-disk cache
+    implementation("androidx.media3:media3-common:1.4.1")
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-exoplayer-hls:1.4.1")
+    implementation("androidx.media3:media3-exoplayer-dash:1.4.1")
+    implementation("androidx.media3:media3-ui:1.4.1")
+    // CacheDataSource/SimpleCache/CacheWriter live in media3-datasource;
+    // StandaloneDatabaseProvider lives in media3-database. There is no
+    // media3-datasource-cache artifact.
+    implementation("androidx.media3:media3-datasource:1.4.1")
+    implementation("androidx.media3:media3-database:1.4.1")
+>>>>>>> origin/main
 
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    // BitTorrent: Java API + native library for every ABI in one AAR, with its own keep rules.
+    implementation("com.frostwire:jlibtorrent-android:2.0.15.3")
+
+    // Networking / coroutines
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+<<<<<<< HEAD
 
     // Android-compatible JNI binding for libtorrent. One artifact per ABI.
     implementation("org.libtorrent4j:libtorrent4j:2.1.0-39")
@@ -317,4 +463,20 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test:rules:1.6.1")
+=======
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
+    // Unit tests (JVM)
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+
+    // Instrumented tests (device / emulator)
+    androidTestImplementation(composeBom)
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:rules:1.6.1")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
+>>>>>>> origin/main
 }
