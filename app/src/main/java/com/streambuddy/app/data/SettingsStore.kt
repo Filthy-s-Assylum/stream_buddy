@@ -9,6 +9,9 @@ import java.net.URLDecoder
 import java.net.URLEncoder
 
 data class AppSettings(
+    val prefetchMinutes: Int = DEFAULT_PREFETCH_MINUTES,
+    val preferHighestQuality: Boolean = false,
+    val smartPrefetch: Boolean = true,
     val playbackCacheMb: Int = 2048,
     val startBufferSeconds: Int = 4,
     val bufferTargetSeconds: Int = 45,
@@ -30,7 +33,10 @@ data class AppSettings(
     val autoplayNextEpisode: Boolean = false,
     val preferredSubtitleLanguage: String = "",
 ) {
+    val prefetchMillis: Long get() = prefetchMinutes * 60_000L
+
     fun sanitized(): AppSettings = copy(
+        prefetchMinutes = prefetchMinutes.coerceIn(MIN_PREFETCH_MINUTES, MAX_PREFETCH_MINUTES),
         playbackCacheMb = playbackCacheMb.coerceIn(128, 16 * 1024),
         startBufferSeconds = startBufferSeconds.coerceIn(2, 30),
         bufferTargetSeconds = bufferTargetSeconds.coerceIn(10, 180),
@@ -47,6 +53,9 @@ data class AppSettings(
     internal fun encode(): String {
         val values = linkedMapOf(
             "v" to "1",
+            "prefetchMinutes" to prefetchMinutes.toString(),
+            "preferHighestQuality" to preferHighestQuality.toString(),
+            "smartPrefetch" to smartPrefetch.toString(),
             "playbackCacheMb" to playbackCacheMb.toString(),
             "startBufferSeconds" to startBufferSeconds.toString(),
             "bufferTargetSeconds" to bufferTargetSeconds.toString(),
@@ -83,6 +92,9 @@ data class AppSettings(
             fun int(key: String, fallback: Int) = map[key]?.toIntOrNull() ?: fallback
             fun bool(key: String, fallback: Boolean) = map[key]?.toBooleanStrictOrNull() ?: fallback
             return AppSettings(
+                prefetchMinutes = int("prefetchMinutes", DEFAULT_PREFETCH_MINUTES),
+                preferHighestQuality = bool("preferHighestQuality", false),
+                smartPrefetch = bool("smartPrefetch", true),
                 playbackCacheMb = int("playbackCacheMb", 2048),
                 startBufferSeconds = int("startBufferSeconds", 4),
                 bufferTargetSeconds = int("bufferTargetSeconds", 45),
@@ -107,6 +119,11 @@ data class AppSettings(
                 preferredSubtitleLanguage = map["preferredSubtitleLanguage"].orEmpty().take(16),
             ).sanitized()
         }
+
+        const val DEFAULT_PREFETCH_MINUTES = 5
+        const val MIN_PREFETCH_MINUTES = 1
+        const val MAX_PREFETCH_MINUTES = 30
+        val PRESET_MINUTES = listOf(2, 5, 10, 20)
     }
 }
 
@@ -114,7 +131,7 @@ data class AppSettings(
  * Settings are serialised to one encrypted blob. No cache limits, torrent
  * preferences or URLs are readable from the preferences file.
  */
-class SettingsStore(context: Context) {
+class SettingsStore private constructor(context: Context) {
     private val prefs = SecurePreferences(context.applicationContext, "stream_buddy_settings")
     private val _settings = MutableStateFlow(load())
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
@@ -146,7 +163,14 @@ class SettingsStore(context: Context) {
         )
     }
 
-    private companion object {
+    companion object {
         const val KEY = "settings_v1"
+
+        @Volatile
+        private var instance: SettingsStore? = null
+
+        fun get(context: Context): SettingsStore = instance ?: synchronized(this) {
+            instance ?: SettingsStore(context.applicationContext).also { instance = it }
+        }
     }
 }

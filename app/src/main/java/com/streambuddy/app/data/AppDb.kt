@@ -13,6 +13,7 @@ import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverter
+import androidx.room.TypeConverters
 import androidx.room.Update
 import com.streambuddy.app.core.security.AppCrypto
 import com.streambuddy.app.stream.CacheState

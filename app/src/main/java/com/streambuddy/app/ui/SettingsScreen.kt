@@ -25,6 +25,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -32,7 +33,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -46,6 +50,7 @@ import com.streambuddy.app.BuildConfig
 import com.streambuddy.app.ai.PrefetchPredictor
 import com.streambuddy.app.cache.CacheManager
 import com.streambuddy.app.data.AppSettings
+import com.streambuddy.app.optimizer.OptimizerUiState
 import com.streambuddy.app.util.Format
 
 /**
@@ -560,6 +565,140 @@ private fun ToggleRow(
             )
         }
         Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+@Composable
+fun SettingsScreen(
+    settings: AppSettings,
+    optimizer: OptimizerUiState,
+    cacheUsedBytes: Long,
+    torrentStorageBytes: Long,
+    vpnActive: Boolean,
+    vpnSummary: String,
+    onChange: (AppSettings) -> Unit,
+    onBack: () -> Unit,
+    onClearCache: () -> Unit,
+    onResetModel: () -> Unit,
+    onRefreshVpn: () -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = onBack) { Text("Back") }
+                SectionHeader(title = "Settings")
+            }
+        }
+        item {
+            SettingsSection(title = "Smart pre-cache") {
+                LabeledValueRow("Optimizer", optimizer.mode.name)
+                LabeledValueRow("Trained samples", optimizer.trainedSamples.toString())
+                ToggleRow(
+                    title = "Smart pre-cache",
+                    detail = "Learn from playback history to prioritize likely next streams.",
+                    checked = settings.smartPrefetch,
+                    onCheckedChange = { onChange(settings.copy(smartPrefetch = it)) },
+                )
+                ToggleRow(
+                    title = "Prefer highest quality",
+                    detail = "Choose higher-quality torrent files when available.",
+                    checked = settings.preferHighestQuality,
+                    onCheckedChange = { onChange(settings.copy(preferHighestQuality = it)) },
+                )
+                Text(
+                    text = "Pre-cache window: ${settings.prefetchMinutes} minutes",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AppSettings.PRESET_MINUTES.forEach { minutes ->
+                        OutlinedButton(onClick = {
+                            onChange(settings.copy(prefetchMinutes = minutes))
+                        }) {
+                            Text("$minutes min")
+                        }
+                    }
+                }
+                OutlinedButton(onClick = onResetModel) { Text("Reset learning") }
+            }
+        }
+        item {
+            SettingsSection(title = "Storage") {
+                LabeledValueRow("Cached media", Format.bytes(cacheUsedBytes))
+                LabeledValueRow("Torrent storage", Format.bytes(torrentStorageBytes))
+                OutlinedButton(onClick = onClearCache, enabled = cacheUsedBytes > 0) {
+                    Text("Clear cache")
+                }
+            }
+        }
+        item {
+            SettingsSection(title = "Privacy and network") {
+                LabeledValueRow(
+                    "VPN status",
+                    if (vpnActive) "Protected route" else "VPN not detected",
+                )
+                Text(vpnSummary, style = MaterialTheme.typography.bodySmall)
+                OutlinedButton(onClick = onRefreshVpn) { Text("Refresh VPN status") }
+                ToggleRow(
+                    title = "Require VPN for network access",
+                    detail = "Pause network activity while a VPN is not active.",
+                    checked = settings.requireVpnForNetwork,
+                    onCheckedChange = { onChange(settings.copy(requireVpnForNetwork = it)) },
+                )
+                ToggleRow(
+                    title = "Enable malware scanning",
+                    detail = "Scan imported files before opening them.",
+                    checked = settings.malwareScanEnabled,
+                    onCheckedChange = { onChange(settings.copy(malwareScanEnabled = it)) },
+                )
+                ToggleRow(
+                    title = "Block screenshots and recording",
+                    detail = "Protect app content from screen capture.",
+                    checked = settings.blockScreenshots,
+                    onCheckedChange = { onChange(settings.copy(blockScreenshots = it)) },
+                )
+            }
+        }
+        item {
+            SettingsSection(title = "Metadata and subtitles") {
+                OutlinedTextField(
+                    value = settings.tmdbApiKey,
+                    onValueChange = { onChange(settings.copy(tmdbApiKey = it.take(200))) },
+                    label = { Text("TMDB API key") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = settings.motnApiKey,
+                    onValueChange = { onChange(settings.copy(motnApiKey = it.take(200))) },
+                    label = { Text("Movie of the Night API key") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = settings.motnCountry,
+                    onValueChange = { onChange(settings.copy(motnCountry = it.take(2))) },
+                    label = { Text("Country code") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = settings.preferredSubtitleLanguage,
+                    onValueChange = {
+                        onChange(settings.copy(preferredSubtitleLanguage = it.take(16)))
+                    },
+                    label = { Text("Preferred subtitle language") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
     }
 }
 

@@ -3,18 +3,6 @@ package com.streambuddy.app.torrent
 import java.net.URLDecoder
 import java.util.Locale
 
-/**
- * A validated v1 BitTorrent magnet. Display names and trackers are treated as
- * untrusted input: trackers are restricted to sane network schemes and the
- * name is only ever rendered as text.
- */
-data class MagnetLink(
-    val infoHashHex: String,
-    val displayName: String?,
-    val trackers: List<String>,
-    val exactLength: Long?,
-)
-
 object Magnet {
 
     private val INFO_HASH_HEX = Regex("^[0-9a-fA-F]{40}$")
@@ -56,7 +44,7 @@ object Magnet {
             infoHashHex = infoHash,
             displayName = name,
             trackers = trackers.toList(),
-            exactLength = length,
+            exactLengthBytes = length,
         )
     }
 
