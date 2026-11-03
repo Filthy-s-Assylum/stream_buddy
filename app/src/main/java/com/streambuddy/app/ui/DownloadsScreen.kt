@@ -57,7 +57,8 @@ import kotlinx.coroutines.delay
  *  - playback cache: evictable, safe to clear at any time;
  *  - torrent scratch: temporary pieces, deleted when playback stops.
  */
-@OptIn(ExperimentalMaterial3Api::class, UnstableApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 fun DownloadsScreen(
     torrent: TorrentUiState,
@@ -227,6 +228,7 @@ fun DownloadsScreen(
     }
 }
 
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 private fun DownloadRow(download: Download, onRemove: () -> Unit) {
     Card(
@@ -276,12 +278,14 @@ private fun DownloadRow(download: Download, onRemove: () -> Unit) {
     }
 }
 
+@androidx.annotation.OptIn(UnstableApi::class)
 private fun downloadLabel(download: Download): String {
     val uri = download.request.uri
     val last = uri.lastPathSegment?.takeIf { it.isNotBlank() }
     return last ?: uri.host ?: download.request.id
 }
 
+@androidx.annotation.OptIn(UnstableApi::class)
 private fun downloadState(state: Int): String = when (state) {
     Download.STATE_QUEUED -> "Queued"
     Download.STATE_DOWNLOADING -> "Downloading"

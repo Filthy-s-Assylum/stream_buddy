@@ -211,7 +211,7 @@ fun LibraryScreen(
             if (items.isEmpty()) {
                 EmptyState(
                     title = "Your library is empty",
-                    body = "Add a movie or show from TMDB, then attach your own authorised magnet, download link or local file. " +
+                    detail = "Add a movie or show from TMDB, then attach your own authorised magnet, download link or local file. " +
                         "Stream Buddy never searches for or supplies copyrighted content.",
                     actionLabel = "Add a title",
                     onAction = onAdd,
@@ -219,7 +219,7 @@ fun LibraryScreen(
             } else if (filtered.isEmpty()) {
                 EmptyState(
                     title = "Nothing matches",
-                    body = "Try clearing the search text or filters.",
+                    detail = "Try clearing the search text or filters.",
                     actionLabel = "Clear filters",
                     onAction = { query = LibraryQuery() },
                 )

@@ -515,7 +515,7 @@ class TorrentManager(
      * Create a .torrent from a user-owned file.
      * Writes the .torrent to private app storage and returns the info hash and magnet output.
      */
-    fun createTorrentFile(
+    suspend fun createTorrentFile(
         sourceFile: File,
         label: String = "StreamBuddy",
         comment: String? = null,
@@ -532,14 +532,19 @@ class TorrentManager(
         builder.comment(label)
         builder.creationDate(System.currentTimeMillis() / 1000L)
         if (comment?.isNotBlank() == true) builder.comment(comment)
-        builder.flags(TorrentFlags.SEQUENTIAL_DOWNLOAD or TorrentFlags.PRIVATE)
+        builder.setPrivate(true)
 
-        val torrentBytes = builder.generate()
-        val infoHash = builder.build().infoHash().toHex()
+        val torrentBytes = builder.generate().entry().bencode()
+        val infoHash = TorrentInfo(torrentBytes).infoHash().toHex()
         val torrentName = sourceFile.name.take(100)
 
         Result.success(CreatedTorrent(torrentBytes = torrentBytes, infoHash = infoHash, torrentName = torrentName, file = sourceFile))
     }
+
+    /** Bytes currently used by torrent data and metadata in app-private storage. */
+    fun storageUsedBytes(): Long = runCatching {
+        torrentRoot.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+    }.getOrDefault(0L)
 
     /** Files being written by the active torrent, excluded from manual scans. */
     fun activeDirectory(): File? = active?.directory
@@ -629,11 +634,11 @@ class TorrentManager(
         val directory: File,
         val handle: TorrentHandle,
         val info: TorrentInfo,
-        val files: List<TorrentFile>,
-        val mainFile: TorrentFile,
+        val files: List<SafeTorrentFile>,
+        val mainFile: SafeTorrentFile,
         val fileOffset: Long,
         val pieceLength: Long,
-        val subtitles: List<TorrentFile>,
+        val subtitles: List<SafeTorrentFile>,
         val startFraction: Double,
     ) {
         lateinit var server: LoopbackServer

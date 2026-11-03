@@ -1,6 +1,8 @@
 package com.streambuddy.app.security
 
 import android.content.Context
+import androidx.annotation.OptIn
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.offline.Download
 import com.streambuddy.app.data.SettingsStore
 import com.streambuddy.app.download.Downloads
@@ -51,6 +53,7 @@ data class SecurityUiState(
  * browser. A malicious file is moved into app-private quarantine before it
  * can be played or exported.
  */
+@OptIn(UnstableApi::class)
 class SecurityCenter(
     private val context: Context,
     private val settingsStore: SettingsStore,

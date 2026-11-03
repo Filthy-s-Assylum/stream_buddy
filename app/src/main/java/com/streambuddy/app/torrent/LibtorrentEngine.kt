@@ -166,9 +166,9 @@ class LibtorrentEngine {
      * the list with a rejection reason so the UI can explain why they are not
      * played, but they are always given [Priority.IGNORE].
      */
-    fun files(info: TorrentInfo): List<TorrentFile> {
+    fun files(info: TorrentInfo): List<SafeTorrentFile> {
         val storage = info.files()
-        val files = ArrayList<TorrentFile>(storage.numFiles())
+        val files = ArrayList<SafeTorrentFile>(storage.numFiles())
         for (index in 0 until storage.numFiles()) {
             val rawPath = runCatching { storage.filePath(index) }.getOrDefault("")
             val size = runCatching { storage.fileSize(index) }.getOrDefault(0L)
@@ -202,7 +202,7 @@ class LibtorrentEngine {
      */
     fun selectFiles(
         handle: TorrentHandle,
-        files: List<TorrentFile>,
+        files: List<SafeTorrentFile>,
         mainIndex: Int,
         subtitleIndexes: Set<Int>,
     ) {
@@ -435,7 +435,7 @@ class LibtorrentEngine {
 class TorrentException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
 /** Human-readable file size helper shared by the torrent and library screens. */
-fun TorrentFile.sizeLabel(): String = com.streambuddy.app.core.Fmt.bytes(size)
+fun SafeTorrentFile.sizeLabel(): String = com.streambuddy.app.core.Fmt.bytes(size)
 
 fun TorrentStatus.shortState(): String = when (state()) {
     TorrentStatus.State.CHECKING_FILES -> "Checking files"
