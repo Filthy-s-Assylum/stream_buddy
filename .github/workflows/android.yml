@@ -68,7 +68,7 @@ jobs:
             echo "RELEASE_STORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
             echo "Release keystore configured."
           else
-            echo "No STREAMBUDDY_KEYSTORE_BASE64 secret; the release build will use debug signing."
+            echo "No STREAMBUDDY_KEYSTORE_BASE64 secret; the release build will be unsigned."
           fi
 
       # R8 + resource shrinking — the same code path a Play Store upload takes.
