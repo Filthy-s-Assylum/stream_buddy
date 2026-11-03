@@ -71,7 +71,7 @@ data class StreamEntity(
     val streamKind: com.streambuddy.app.stream.StreamKind
         get() = com.streambuddy.app.stream.StreamKind.fromName(kind)
 
-    val cacheState: com.streambuddy.app.stream.CacheState get() = 
+    val cacheState: com.streambuddy.app.stream.CacheState get() =
         com.streambuddy.app.stream.CacheState.fromName(state)
 
     /** Percentage of the requested pre-play window (or whole file) that is cached. */
