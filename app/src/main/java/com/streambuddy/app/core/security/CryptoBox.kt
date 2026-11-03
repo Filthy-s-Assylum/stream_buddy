@@ -5,7 +5,6 @@ import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import java.security.KeyStore
-import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -24,15 +23,14 @@ interface StringCipher {
     fun decrypt(payload: String): String
 }
 
-class AesGcmCipher(
-    private val key: SecretKey,
-    private val random: SecureRandom = SecureRandom(),
-) : StringCipher {
+class AesGcmCipher(private val key: SecretKey) : StringCipher {
 
     override fun encrypt(plainText: String): String {
-        val iv = ByteArray(IV_BYTES).also(random::nextBytes)
+        // Keystore keys require randomized encryption: the provider must generate the IV,
+        // and passing our own makes init() throw InvalidAlgorithmParameterException.
         val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG_BITS, iv))
+        cipher.init(Cipher.ENCRYPT_MODE, key)
+        val iv = cipher.iv
         val cipherText = cipher.doFinal(plainText.toByteArray(Charsets.UTF_8))
         return "$PREFIX${iv.toHex()}.${cipherText.toHex()}"
     }
@@ -98,7 +96,7 @@ class KeystoreCipher private constructor(private val cipher: AesGcmCipher) : Str
             }
             return try {
                 generate(useStrongBox)
-            } catch (_: java.security.ProviderException) {
+            } catch (_: Exception) {
                 // StrongBoxUnavailableException (API 28+) extends ProviderException; some OEMs
                 // also advertise StrongBox but fail at generation time.
                 generate(false)
