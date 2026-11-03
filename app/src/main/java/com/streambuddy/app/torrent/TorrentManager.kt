@@ -20,6 +20,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.libtorrent4j.TorrentBuilder
 import org.libtorrent4j.TorrentHandle
 import org.libtorrent4j.TorrentInfo
 import java.io.File
@@ -497,9 +498,48 @@ class TorrentManager(
         }
     }
 
-    fun storageUsedBytes(): Long = runCatching {
-        torrentRoot.walkTopDown().filter { it.isFile }.sumOf { it.length() }
-    }.getOrDefault(0L)
+    /**
+     * Create a .torrent from a user-owned file.
+     * Writes the .torrent to private app storage and returns the info hash and magnet output.
+     * The .torrent is intended for loopback-only HTTP streaming via PlayerEngine.openTorrentFile().
+     * Caller must ensure they own the content and have the right to create a torrent from it.
+     */
+    data class CreatedTorrent(
+        val torrentBytes: ByteArray,
+        val infoHash: String,
+        val torrentName: String,
+        val file: File,
+    )
+
+    /**
+     * Create a .torrent from a user-owned file.
+     * Writes the .torrent to private app storage and returns the info hash and magnet output.
+     */
+    fun createTorrentFile(
+        sourceFile: File,
+        label: String = "StreamBuddy",
+        comment: String? = null,
+    ): Result<CreatedTorrent> = withContext(Dispatchers.IO) {
+        val extension = sourceFile.name.substringAfterLast('.', "").lowercase(Locale.US)
+        if (extension !in setOf("mp4", "m4v", "mkv", "webm", "avi", "mov", "ts", "m2ts", "mts")) {
+            return@withContext Result.failure(
+                TorrentException("Unsupported file type for torrent creation. Use video files only.")
+            )
+        }
+
+        val builder = TorrentBuilder()
+        builder.path(sourceFile)
+        builder.comment(label)
+        builder.creationDate(System.currentTimeMillis() / 1000L)
+        if (comment?.isNotBlank() == true) builder.comment(comment)
+        builder.flags(TorrentFlags.SEQUENTIAL_DOWNLOAD or TorrentFlags.PRIVATE)
+
+        val torrentBytes = builder.generate()
+        val infoHash = builder.build().infoHash().toHex()
+        val torrentName = sourceFile.name.take(100)
+
+        Result.success(CreatedTorrent(torrentBytes = torrentBytes, infoHash = infoHash, torrentName = torrentName, file = sourceFile))
+    }
 
     /** Files being written by the active torrent, excluded from manual scans. */
     fun activeDirectory(): File? = active?.directory
@@ -662,9 +702,20 @@ class TorrentManager(
                 else -> "application/octet-stream"
             }
         }
+
+        /**
+         * Create a .torrent from a user-owned video file.
+         * Writes the .torrent to private app storage and returns a [CreatedTorrent]
+         * containing the .torrent bytes, info hash, and suggested name.
+         * The .torrent is intended for loopback-only HTTP streaming via
+         * [PlayerEngine.openTorrentFile()].
+         * Caller must own the content and have the right to create a torrent from it.
+         */
     }
 }
 
+// The handle does not exist yet. Upload is paused again by the first poll
+// if seeding is disabled, and the initial flags are SEQUENTIAL_DOWNLOAD.
 private fun LibtorrentEngine.setSeedingEnabledLater() {
     // The handle does not exist yet. Upload is paused again by the first poll
     // if seeding is disabled, and the initial flags are SEQUENTIAL_DOWNLOAD.

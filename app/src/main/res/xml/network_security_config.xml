@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+      Media URLs are supplied by the user and some HLS/DASH origins are still
+      HTTP-only. Stream Buddy warns before using cleartext media and never
+      sends app secrets over the network. The only built-in cleartext endpoint
+      is the loopback streaming server, bound to 127.0.0.1 and protected by a
+      per-session token.
+    -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>
