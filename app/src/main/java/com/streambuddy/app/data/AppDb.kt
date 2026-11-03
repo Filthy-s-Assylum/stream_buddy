@@ -228,7 +228,7 @@ interface RiskSampleDao {
     suspend fun labelledCount(): Int
 
     @Query("SELECT * FROM risk_samples ORDER BY createdAt DESC LIMIT :limit")
-    fun observeRecent(limit: Int): Flow<List<RiskSampleEntity>}
+    fun observeRecent(limit: Int): Flow<List<RiskSampleEntity>>
 }
 
 /** 
