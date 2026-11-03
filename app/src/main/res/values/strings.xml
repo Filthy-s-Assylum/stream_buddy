@@ -7,13 +7,6 @@
     <string name="tab_player">Player</string>
     <string name="tab_settings">Settings</string>
 
-    <string name="action_play">Play</string>
-    <string name="action_prefetch">Pre-play</string>
-    <string name="action_retry">Retry</string>
-    <string name="action_cancel">Cancel</string>
-    <string name="action_delete">Delete</string>
-    <string name="action_clear_cache">Clear cache</string>
-
     <string name="shortcut_queue_short">Queue</string>
     <string name="shortcut_queue_long">Add a stream to the queue</string>
     <string name="shortcut_settings_short">Settings</string>

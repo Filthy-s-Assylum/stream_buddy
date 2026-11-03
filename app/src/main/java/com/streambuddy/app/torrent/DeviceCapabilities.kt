@@ -3,10 +3,8 @@ package com.streambuddy.app.torrent
 import android.content.Context
 import android.media.MediaCodecList
 import android.media.MediaFormat
-import android.os.Build
 import android.view.Display
 import android.view.WindowManager
-import androidx.annotation.RequiresApi
 import android.os.StatFs
 import android.util.DisplayMetrics
 import java.io.File
@@ -94,16 +92,11 @@ object DeviceCapabilities {
     /** True when the panel reports HDR10 or HLG support. */
     @Suppress("DEPRECATION") // Display.getHdrCapabilities has no non-deprecated replacement below API 30.
     fun supportsHdr(context: Context): Boolean = cachedHdr ?: run {
-        val result = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            runCatching { hdrFromDisplay(context) }.getOrDefault(false)
-        } else {
-            false
-        }
+        val result = runCatching { hdrFromDisplay(context) }.getOrDefault(false)
         cachedHdr = result
         result
     }
 
-    @RequiresApi(Build.VERSION_CODES.N)
     @Suppress("DEPRECATION")
     private fun hdrFromDisplay(context: Context): Boolean {
         val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
