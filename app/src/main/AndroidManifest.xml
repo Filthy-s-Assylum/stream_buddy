@@ -109,7 +109,7 @@
 
         <service
             android:name=".download.SbDownloadService"
-            android:exported="true"
+            android:exported="false"
             android:foregroundServiceType="dataSync">
             <intent-filter>
                 <action android:name="androidx.media3.exoplayer.download.DownloadService" />
