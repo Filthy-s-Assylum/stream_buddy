@@ -88,18 +88,26 @@ jobs:
         run: |
           cat test.log lint.log androidtest.log assemble.log release.log > ci.log 2>/dev/null || true
           [ -f ci.log ] || exit 0
-          total=$(grep -cE '^e: ' ci.log || true)
-          echo "::error::Kotlin compile errors: ${total:-0}"
-          grep -E '^e: ' ci.log | sed -E 's|file:///[^ ]*/app/|app/|' | sort -u | head -30 \
+          total=$(grep -cE '^e: (file://|[^[:space:]]+\.kt:)' ci.log || true)
+          if [ "${total:-0}" -gt 0 ]; then
+            echo "::error::Kotlin compile errors: $total"
+          fi
+          grep -E '^e: (file://|[^[:space:]]+\.kt:)' ci.log \
+            | sed -E 's|file:///[^ ]*/app/|app/|' | sort -u | head -30 \
             | while IFS= read -r line; do printf '::error::%s\n' "$line"; done
           grep -E 'FAILED|There were failing tests|Execution failed for task|Lint found' ci.log \
             | grep -vE '^e: ' | sed -E 's/^ +//' | sort -u | head -8 \
             | while IFS= read -r line; do printf '::error::%s\n' "$line"; done
-          # Every lint error, one annotation each.
+          # Preserve lint severity in GitHub annotations.
           if [ -f app/build/reports/lint-results-debug.txt ]; then
             grep -E '^[^ ].*: (Error|Warning): ' app/build/reports/lint-results-debug.txt \
               | sed -E 's|/home/runner/work/stream_buddy/stream_buddy/||' | sort -u | head -14 \
-              | while IFS= read -r line; do printf '::error::%s\n' "$line"; done
+              | while IFS= read -r line; do
+                  case "$line" in
+                    *': Error: '*) printf '::error::%s\n' "$line" ;;
+                    *': Warning: '*) printf '::warning::%s\n' "$line" ;;
+                  esac
+                done
           fi
           sed -n '/What went wrong:/,/Try:/p' ci.log | sed -E 's/^ +//' | grep -v '^$' | head -12 \
             | while IFS= read -r line; do printf '::error::%s\n' "$line"; done

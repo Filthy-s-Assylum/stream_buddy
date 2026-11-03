@@ -54,8 +54,8 @@ data class StreamEntity(
     /** The stream URL, or a `magnet:` link for torrent entries. */
     val url: String,
     val kind: String = com.streambuddy.app.stream.StreamKind.UNKNOWN.name,
-    val mode: String = com.streambuddy.app.ui.PlaybackMode.WATCH_NOW.name,
-    val state: String = com.streambuddy.app.cache.CacheState.QUEUED.name,
+    val mode: String = com.streambuddy.app.data.PlaybackMode.WATCH_NOW.name,
+    val state: String = com.streambuddy.app.stream.CacheState.QUEUED.name,
     val addedAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
     val lastPlayedAt: Long? = null,
@@ -71,8 +71,8 @@ data class StreamEntity(
     val streamKind: com.streambuddy.app.stream.StreamKind
         get() = com.streambuddy.app.stream.StreamKind.fromName(kind)
 
-    val cacheState: com.streambuddy.app.cache.CacheState get() = 
-        com.streambuddy.app.cache.CacheState.fromName(state)
+    val cacheState: com.streambuddy.app.stream.CacheState get() =
+        com.streambuddy.app.stream.CacheState.fromName(state)
 
     /** Percentage of the requested pre-play window (or whole file) that is cached. */
     val progressPercent: Int?

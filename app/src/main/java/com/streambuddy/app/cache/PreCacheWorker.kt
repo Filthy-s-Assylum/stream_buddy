@@ -6,7 +6,6 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.work.BackoffPolicy
@@ -297,14 +296,18 @@ class PreCacheWorker(
     }
 
     private fun ensureChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = applicationContext
             .getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
         if (manager.getNotificationChannel(CHANNEL_ID) != null) return
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "Pre-cache progress", NotificationManager.IMPORTANCE_LOW)
+            NotificationChannel(
+                CHANNEL_ID,
+                applicationContext.getString(R.string.notification_channel_name),
+                NotificationManager.IMPORTANCE_LOW,
+            )
                 .apply {
-                    description = "Shows how much of a stream has been cached for playback"
+                    description =
+                        applicationContext.getString(R.string.notification_channel_description)
                     setShowBadge(false)
                 },
         )
