@@ -150,7 +150,7 @@ class SettingsStore private constructor(context: Context) {
     fun update(transform: (AppSettings) -> AppSettings): AppSettings {
         synchronized(this) {
             val updated = transform(_settings.value).sanitized()
-            prefs.putString(KEY, updated.encode())
+            runCatching { prefs.putString(KEY, updated.encode()) }
             _settings.value = updated
             return updated
         }
