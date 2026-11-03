@@ -4,8 +4,10 @@
   self-hosted libraries, carrier CDNs). Playback of http:// URLs therefore has to be
   permitted for the player to work. Traffic is only fetched for URLs the user adds.
 -->
-<network-security-config>
-    <base-config cleartextTrafficPermitted="true">
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
+    <base-config
+        cleartextTrafficPermitted="true"
+        tools:ignore="InsecureBaseConfiguration">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
