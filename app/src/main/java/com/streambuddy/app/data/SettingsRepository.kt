@@ -17,23 +17,27 @@ class SettingsRepository private constructor(context: Context) {
             prefs.contains(KEY_HIGHEST_QUALITY) ||
             prefs.contains(KEY_SMART_PREFETCH)
         ) {
-            val persisted = settingsStore.updateAndReportPersistence { current ->
-                current.copy(
-                    prefetchMinutes = prefs.getInt(
-                        KEY_PREFETCH_MINUTES,
-                        AppSettings.DEFAULT_PREFETCH_MINUTES,
-                    ),
-                    preferHighestQuality = prefs.getBoolean(KEY_HIGHEST_QUALITY, false),
-                    smartPrefetch = prefs.getBoolean(KEY_SMART_PREFETCH, true),
-                )
-            }
-            if (persisted) {
-                prefs.edit {
-                    remove(KEY_PREFETCH_MINUTES)
-                    remove(KEY_HIGHEST_QUALITY)
-                    remove(KEY_SMART_PREFETCH)
-                }
-            }
+            migrateLegacySettings(
+                writeSettings = {
+                    settingsStore.updateWithPersistenceStatus { current ->
+                        current.copy(
+                            prefetchMinutes = prefs.getInt(
+                                KEY_PREFETCH_MINUTES,
+                                AppSettings.DEFAULT_PREFETCH_MINUTES,
+                            ),
+                            preferHighestQuality = prefs.getBoolean(KEY_HIGHEST_QUALITY, false),
+                            smartPrefetch = prefs.getBoolean(KEY_SMART_PREFETCH, true),
+                        )
+                    }.second
+                },
+                removeLegacySettings = {
+                    prefs.edit {
+                        remove(KEY_PREFETCH_MINUTES)
+                        remove(KEY_HIGHEST_QUALITY)
+                        remove(KEY_SMART_PREFETCH)
+                    }
+                },
+            )
         }
     }
 
@@ -70,5 +74,14 @@ class SettingsRepository private constructor(context: Context) {
         fun get(context: Context): SettingsRepository = instance ?: synchronized(this) {
             instance ?: SettingsRepository(context).also { instance = it }
         }
+    }
+}
+
+internal fun migrateLegacySettings(
+    writeSettings: () -> Boolean,
+    removeLegacySettings: () -> Unit,
+) {
+    if (writeSettings()) {
+        removeLegacySettings()
     }
 }

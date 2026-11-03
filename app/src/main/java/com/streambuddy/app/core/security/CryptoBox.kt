@@ -183,6 +183,9 @@ class SecurePreferences(
         prefs.edit().putString(key, codec.encrypt(value)).apply()
     }
 
+    fun putStringAndCommit(key: String, value: String): Boolean =
+        prefs.edit().putString(key, codec.encrypt(value)).commit()
+
     fun remove(key: String) {
         prefs.edit().remove(key).apply()
     }
