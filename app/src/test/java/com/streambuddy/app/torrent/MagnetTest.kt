@@ -20,7 +20,7 @@ class MagnetTest {
 
         assertEquals(hexHash, link.infoHashHex)
         assertEquals("Example Movie 2024", link.displayName)
-        assertEquals(1234L, link.exactLength)
+        assertEquals(1234L, link.exactLengthBytes)
         assertEquals(2, link.trackers.size)
         assertTrue(link.trackers.any { it.startsWith("udp://") })
     }
