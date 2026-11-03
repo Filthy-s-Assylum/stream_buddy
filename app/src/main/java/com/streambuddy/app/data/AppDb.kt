@@ -91,7 +91,7 @@ data class StreamEntity(
         }
 }
 
-/@Entity(tableName = "playback_sessions", indices = [Index("startedAt"), Index("policy")])
+@Entity(tableName = "playback_sessions", indices = [Index("startedAt"), Index("policy")])
 data class PlaybackSessionEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val title: EncryptedString,
@@ -202,7 +202,7 @@ interface StreamDao {
         "UPDATE streams SET prefetchMillis = :prefetchMillis, state = :state, error = NULL, updatedAt = :now WHERE id = :id"
     )
     suspend fun resetForCaching(id: Long, prefetchMillis: Long, state: String, now: Long)
-)
+}
 
 @Dao
 interface SessionDao {
@@ -228,8 +228,8 @@ interface RiskSampleDao {
     suspend fun labelledCount(): Int
 
     @Query("SELECT * FROM risk_samples ORDER BY createdAt DESC LIMIT :limit")
-    fun observeRecent(limit: Int): Flow<List<RiskSampleEntity>}
-)
+    fun observeRecent(limit: Int): Flow<List<RiskSampleEntity>>
+}
 
 /** 
  * Pre-1.0 union of both histories: [StreamEntity]/[SessionDao]/[RiskSampleDao]/[LibraryDao]
