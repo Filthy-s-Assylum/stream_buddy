@@ -1,10 +1,12 @@
 package com.streambuddy.app.playback
 
 import android.content.Context
+import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
+import androidx.media3.common.util.UnstableApi
 import com.streambuddy.app.cache.PlaybackCache
 import com.streambuddy.app.torrent.TorrentUiState
 import kotlin.math.max
@@ -37,6 +39,7 @@ data class PlaybackStatsUi(
  * user's connection type. If no load has completed yet the value is 0 and the
  * UI shows "—".
  */
+@OptIn(UnstableApi::class)
 class PlaybackAnalytics {
 
     private var sessionStartedAt = 0L

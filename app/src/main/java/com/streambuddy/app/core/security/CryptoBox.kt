@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
-import android.security.keystore.StrongBoxUnavailableException
 import java.security.KeyStore
 import java.security.SecureRandom
 import javax.crypto.Cipher
@@ -99,10 +98,9 @@ class KeystoreCipher private constructor(private val cipher: AesGcmCipher) : Str
             }
             return try {
                 generate(useStrongBox)
-            } catch (_: StrongBoxUnavailableException) {
-                generate(false)
             } catch (_: java.security.ProviderException) {
-                // Some OEMs advertise StrongBox but fail at generation time.
+                // StrongBoxUnavailableException (API 28+) extends ProviderException; some OEMs
+                // also advertise StrongBox but fail at generation time.
                 generate(false)
             }
         }

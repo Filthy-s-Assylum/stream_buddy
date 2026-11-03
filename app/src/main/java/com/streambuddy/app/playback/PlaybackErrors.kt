@@ -1,6 +1,8 @@
 package com.streambuddy.app.playback
 
+import androidx.annotation.OptIn
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.util.UnstableApi
 import com.streambuddy.app.data.StreamKind
 
 /**
@@ -10,6 +12,7 @@ import com.streambuddy.app.data.StreamKind
  * DRM, paywalls, geo blocks or expired links. When the cause is outside the
  * app, the message says so instead of pretending a retry will fix it.
  */
+@OptIn(UnstableApi::class)
 object PlaybackErrors {
 
     fun friendly(error: PlaybackException, kind: StreamKind): String {

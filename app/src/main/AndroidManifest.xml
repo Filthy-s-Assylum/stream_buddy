@@ -79,8 +79,8 @@
                 <data android:scheme="magnet" />
             </intent-filter>
 
-            <!-- Local videos opened from a file manager. -->
-            <intent-filter>
+            <!-- Local videos opened from a file manager (content:// and file:// are implied). -->
+            <intent-filter tools:ignore="AppLinkUrlError">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="video/*" />
