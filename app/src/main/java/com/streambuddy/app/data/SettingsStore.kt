@@ -191,4 +191,6 @@ class SettingsStore private constructor(context: Context) {
             instance ?: SettingsStore(context.applicationContext).also { instance = it }
         }
     }
+
+    private data class UpdateResult(val settings: AppSettings, val persisted: Boolean)
 }
