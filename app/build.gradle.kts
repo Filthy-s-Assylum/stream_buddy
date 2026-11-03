@@ -210,7 +210,7 @@ android {
     }
 
     lint {
-        abortOnError = false
+        abortOnError = true
         checkReleaseBuilds = false
         textReport = true
         textOutput = File(project.layout.buildDirectory.get().asFile, "reports/lint-results-debug.txt")
