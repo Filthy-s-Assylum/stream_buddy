@@ -114,5 +114,8 @@ class MainActivity : ComponentActivity() {
     private companion object {
         val MAGNET_PATTERN = Regex("magnet:\\?[^\\s]+", RegexOption.IGNORE_CASE)
         val URL_PATTERN = Regex("https?://[^\\s]+", RegexOption.IGNORE_CASE)
+        val STREAMTAPE_PATTERN = Regex("https?://(?:www\\.)?streamtape\\.(?:com|eu)/(?:[a-zA-Z0-9]+)?", RegexOption.IGNORE_CASE)
+        val DOOD_PATTERN = Regex("https?://(?:www\\.)?dood\\.(?:co|to)/(?:[a-zA-Z0-9]+)?", RegexOption.IGNORE_CASE)
+        val UPTOBOX_PATTERN = Regex("https?://(?:www\\.)?uptobox\\.(?:com|net)/(?:[a-zA-Z0-9]+)?", RegexOption.IGNORE_CASE)
     }
 }

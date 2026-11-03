@@ -514,5 +514,11 @@ fun validateSource(value: String): String? {
         return "Only magnet links, http(s) media links and local files are supported"
     }
     if (uri.host.isNullOrBlank()) return "The link has no host"
-    return null
+    // Accept these file-hosting and video platforms:
+    val host = uri.host.lowercase()
+    return when {
+        host == "streamtape.com" || host == "dood.co" || host == "dood.to" || host == "uptobox.com" || host == "uptobox.net" -> null
+        host endsWith(".piratebay") || host == "1337x" || host.endsWith("rarbg") || host == "yts" || host == "eztv" -> null
+        else -> null
+    }
 }
