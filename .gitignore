@@ -1,0 +1,14 @@
+.gradle/
+build/
+**/build/
+.kotlin/
+.idea/
+*.iml
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+*.jks
+*.keystore
+.env
+opencode-termux.sh
