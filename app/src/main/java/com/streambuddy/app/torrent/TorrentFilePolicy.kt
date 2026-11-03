@@ -77,7 +77,8 @@ object TorrentFilePolicy {
             if (segment.isEmpty()) return rejected("Path contains an empty segment")
             if (segment == "." || segment == "..") return rejected("Path traversal is rejected")
             if (segment.length > MAX_SEGMENT_LENGTH) return rejected("File name is too long")
-            if (segment.endsWith(' ') || segment.endsWith('.')) {
+            val base = segment.substringBeforeLast('.', segment)
+            if (segment.endsWith(' ') || segment.endsWith('.') || base.endsWith(' ') || base.endsWith('.')) {
                 return rejected("File name ends with a space or dot")
             }
             val base = segment.substringBeforeLast('.')
