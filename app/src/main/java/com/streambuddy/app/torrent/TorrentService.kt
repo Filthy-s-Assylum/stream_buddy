@@ -110,18 +110,16 @@ class TorrentService : Service() {
 
     private fun createChannel() {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            manager.createNotificationChannel(
-                NotificationChannel(
-                    CHANNEL_ID,
-                    getString(R.string.torrent_channel_name),
-                    NotificationManager.IMPORTANCE_LOW,
-                ).apply {
-                    setShowBadge(false)
-                    description = "Progress for the torrent you are streaming"
-                },
-            )
-        }
+        manager.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_ID,
+                getString(R.string.torrent_channel_name),
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply {
+                setShowBadge(false)
+                description = "Progress for the torrent you are streaming"
+            },
+        )
     }
 
     companion object {
