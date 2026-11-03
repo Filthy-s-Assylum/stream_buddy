@@ -3,18 +3,8 @@
     <string name="app_name">Stream Buddy</string>
 
     <!-- Navigation (remote's 4-route shell) -->
-    <string name="tab_apps">Apps</string>
-    <string name="tab_queue">Queue</string>
     <string name="tab_player">Player</string>
     <string name="tab_settings">Settings</string>
-
-    <!-- Actions -->
-    <string name="action_play">Play</string>
-    <string name="action_prefetch">Pre-play</string>
-    <string name="action_retry">Retry</string>
-    <string name="action_cancel">Cancel</string>
-    <string name="action_delete">Delete</string>
-    <string name="action_clear_cache">Clear cache</string>
 
     <!-- Shortcuts -->
     <string name="shortcut_queue_short">Queue</string>
@@ -30,5 +20,4 @@
     <!-- Foreground-service channels (our VPN/torrent/download work) -->
     <string name="download_channel_name">Offline downloads</string>
     <string name="torrent_channel_name">Torrent streaming</string>
-    <string name="playback_channel_name">Playback</string>
 </resources>

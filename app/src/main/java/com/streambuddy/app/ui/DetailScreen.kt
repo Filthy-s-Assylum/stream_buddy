@@ -82,7 +82,7 @@ fun DetailScreen(
     onWatchInBrowser: (String) -> Unit,
 ) {
     if (item == null) {
-        EmptyState("Title not found", "It may have been deleted.", "Back", onBack)
+        EmptyState("Title not found", "It may have been deleted.", actionLabel = "Back", onAction = onBack)
         return
     }
 
