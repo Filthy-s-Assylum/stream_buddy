@@ -17,7 +17,7 @@ class SettingsRepository private constructor(context: Context) {
             prefs.contains(KEY_HIGHEST_QUALITY) ||
             prefs.contains(KEY_SMART_PREFETCH)
         ) {
-            settingsStore.update { current ->
+            val persisted = settingsStore.updateAndReportPersistence { current ->
                 current.copy(
                     prefetchMinutes = prefs.getInt(
                         KEY_PREFETCH_MINUTES,
@@ -27,10 +27,12 @@ class SettingsRepository private constructor(context: Context) {
                     smartPrefetch = prefs.getBoolean(KEY_SMART_PREFETCH, true),
                 )
             }
-            prefs.edit {
-                remove(KEY_PREFETCH_MINUTES)
-                remove(KEY_HIGHEST_QUALITY)
-                remove(KEY_SMART_PREFETCH)
+            if (persisted) {
+                prefs.edit {
+                    remove(KEY_PREFETCH_MINUTES)
+                    remove(KEY_HIGHEST_QUALITY)
+                    remove(KEY_SMART_PREFETCH)
+                }
             }
         }
     }

@@ -147,12 +147,18 @@ class SettingsStore private constructor(context: Context) {
 
     fun current(): AppSettings = _settings.value
 
-    fun update(transform: (AppSettings) -> AppSettings): AppSettings {
+    fun update(transform: (AppSettings) -> AppSettings): AppSettings =
+        updateInternal(transform).settings
+
+    fun updateAndReportPersistence(transform: (AppSettings) -> AppSettings): Boolean =
+        updateInternal(transform).persisted
+
+    private fun updateInternal(transform: (AppSettings) -> AppSettings): UpdateResult {
         synchronized(this) {
             val updated = transform(_settings.value).sanitized()
-            runCatching { prefs.putString(KEY, updated.encode()) }
+            val persisted = runCatching { prefs.putString(KEY, updated.encode()) }.isSuccess
             _settings.value = updated
-            return updated
+            return UpdateResult(updated, persisted)
         }
     }
 
@@ -173,4 +179,6 @@ class SettingsStore private constructor(context: Context) {
             instance ?: SettingsStore(context.applicationContext).also { instance = it }
         }
     }
+
+    private data class UpdateResult(val settings: AppSettings, val persisted: Boolean)
 }
