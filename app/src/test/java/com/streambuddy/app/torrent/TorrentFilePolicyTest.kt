@@ -149,7 +149,7 @@ class TorrentFilePolicyTest {
         assertEquals("abcdef0123456789-torrent", TorrentFilePolicy.safeDirectoryName("abcdef0123456789", null))
     }
 
-    private fun file(path: String, size: Long, kind: FileKind) = TorrentFile(
+    private fun file(path: String, size: Long, kind: FileKind) = SafeTorrentFile(
         index = 0,
         path = path,
         size = size,

@@ -7,7 +7,7 @@ import java.util.Locale
  * is never used to build a filesystem path directly; [safePath] is validated
  * first and later resolved under the app's private torrent directory.
  */
-data class TorrentFile(
+data class SafeTorrentFile(
     val index: Int,
     val path: String,
     val size: Long,
@@ -58,9 +58,9 @@ object TorrentFilePolicy {
      * Returns a sanitized relative path using '/' separators, or null with a
      * human-readable reason when the entry must not be written to disk.
      */
-    fun sanitize(path: String, index: Int): TorrentFile {
+    fun sanitize(path: String, index: Int): SafeTorrentFile {
         val kind = classify(path)
-        fun rejected(reason: String) = TorrentFile(index, path, 0, null, kind, reason)
+        fun rejected(reason: String) = SafeTorrentFile(index, path, 0, null, kind, reason)
 
         if (path.isBlank()) return rejected("Empty path")
         if (path.length > MAX_PATH_LENGTH) return rejected("Path is too long")
@@ -84,7 +84,7 @@ object TorrentFilePolicy {
             val stem = segment.substringBefore('.').lowercase(Locale.US)
             if (stem in WINDOWS_RESERVED) return rejected("Reserved file name")
         }
-        return TorrentFile(index, path, 0, segments.joinToString("/"), kind)
+        return SafeTorrentFile(index, path, 0, segments.joinToString("/"), kind)
     }
 
     /**
@@ -92,7 +92,7 @@ object TorrentFilePolicy {
      * clips unless nothing else exists. Audio-only torrents are supported as a
      * fallback so podcasts and music are not rejected.
      */
-    fun chooseMainFile(files: List<TorrentFile>): TorrentFile? {
+    fun chooseMainFile(files: List<SafeTorrentFile>): SafeTorrentFile? {
         val playable = files.filter { it.playable && it.rejection == null }
         val videos = playable.filter { it.kind == FileKind.VIDEO }
         if (videos.isEmpty()) return playable.maxByOrNull { it.size }
@@ -101,12 +101,12 @@ object TorrentFilePolicy {
         return pool.maxByOrNull { it.size }
     }
 
-    fun isSample(file: TorrentFile): Boolean {
+    fun isSample(file: SafeTorrentFile): Boolean {
         val name = file.fileName.lowercase(Locale.US)
         return name.contains("sample") || name.contains("trailer") || name.contains("extras")
     }
 
-    fun subtitles(files: List<TorrentFile>): List<TorrentFile> =
+    fun subtitles(files: List<SafeTorrentFile>): List<SafeTorrentFile> =
         files.filter { it.rejection == null && it.kind == FileKind.SUBTITLE }
 
     /** A bounded, filesystem-safe display name used for the torrent directory. */

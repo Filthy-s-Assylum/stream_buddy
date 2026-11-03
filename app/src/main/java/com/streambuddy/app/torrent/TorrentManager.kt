@@ -629,11 +629,11 @@ class TorrentManager(
         val directory: File,
         val handle: TorrentHandle,
         val info: TorrentInfo,
-        val files: List<TorrentFile>,
-        val mainFile: TorrentFile,
+        val files: List<SafeTorrentFile>,
+        val mainFile: SafeTorrentFile,
         val fileOffset: Long,
         val pieceLength: Long,
-        val subtitles: List<TorrentFile>,
+        val subtitles: List<SafeTorrentFile>,
         val startFraction: Double,
     ) {
         lateinit var server: LoopbackServer
