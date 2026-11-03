@@ -100,9 +100,9 @@ fun StatTile(
 fun EmptyState(
     title: String,
     detail: String,
+    modifier: Modifier = Modifier,
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
-    modifier: Modifier = Modifier,
 ) {
     Column(
         modifier = modifier.fillMaxWidth().padding(vertical = 24.dp),
