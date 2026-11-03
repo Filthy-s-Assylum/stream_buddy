@@ -38,6 +38,10 @@
 -keep class com.frostwire.jlibtorrent.swig.** { *; }
 -dontwarn com.frostwire.jlibtorrent.**
 
+# --- libtorrent4j ---
+-keep class org.libtorrent4j.** { *; }
+-dontwarn org.libtorrent4j.**
+
 # --- OkHttp ---
 -dontwarn okhttp3.**
 -dontwarn okio.**

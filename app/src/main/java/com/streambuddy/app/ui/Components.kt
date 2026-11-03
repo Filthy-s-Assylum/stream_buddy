@@ -33,6 +33,56 @@ fun SectionHeader(title: String, modifier: Modifier = Modifier, subtitle: String
     }
 }
 
+/** Short, stable identifier used in URIs and as a cache key. */
+@Composable
+fun SectionTitle(text: String, modifier: Modifier = Modifier, trailing: (@Composable () -> Unit)? = null) {
+    Row(
+        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.weight(1f),
+        )
+        trailing?.invoke()
+    }
+}
+
+@Composable
+fun StatTile(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    hint: String? = null,
+) {
+    Card(
+        modifier = modifier,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Text(
+                text = label.uppercase(),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            if (hint != null) {
+                Text(
+                    text = hint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
 /** Centered "nothing here yet" placeholder. */
 @Composable
 fun EmptyState(title: String, detail: String, modifier: Modifier = Modifier) {
@@ -110,6 +160,97 @@ fun LabeledValueRow(label: String, value: String, valueColor: Color? = null) {
             text = value,
             style = MaterialTheme.typography.bodyMedium,
             color = valueColor ?: MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+/** Label on the left, value on the right. */
+@Composable
+fun LabeledValue(label: String, value: String, modifier: Modifier = Modifier) {
+    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        Text(
+            text = label,
+            modifier = Modifier.width(120.dp),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+/** Convenience entry points for `magnet:` links. */
+@Composable
+fun MagnetLinkPreview(magnet: String, onMagnet: () -> Unit, onMedia: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Button(onClick = onMagnet) { Text("Magnet") }
+        Button(onClick = onMedia) { Text("Media") }
+    }
+}
+
+/** A bounded, filesystem-safe display name used for the torrent directory. */
+@Composable
+fun TorrentName(infoHash: String, name: String?) {
+    val cleaned = (name ?: "")
+        .replace(Regex("[^A-Za-z0-9._ -]"), "_")
+        .trim()
+        .trim('.')
+        .take(80)
+        .ifBlank { "torrent" }
+    Text(
+        text = "${infoHash.take(8).lowercase(Locale.US)}-$cleaned",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+/** Bytes display. */
+@Composable
+fun BytesLabel(bytes: Long, modifier: Modifier = Modifier) {
+    Text(com.streambuddy.app.core.Fmt.bytes(bytes), modifier = modifier, style = MaterialTheme.typography.bodySmall)
+}
+
+/** Primary/secondary action row. */
+@Composable
+fun SmallActionRow(
+    primaryLabel: String,
+    onPrimary: () -> Unit,
+    secondaryLabel: String? = null,
+    onSecondary: (() -> Unit)? = null,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Button(onClick = onPrimary) { Text(primaryLabel) }
+        if (secondaryLabel != null && onSecondary != null) {
+            TextButton(onClick = onSecondary, modifier = Modifier.weight(1f)) {
+                Text(secondaryLabel)
+            }
+        }
+    }
+}
+
+/** Progress line. */
+@Composable
+fun ProgressLine(fraction: Double, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(4.dp)
+            .clip(RoundedCornerShape(2.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth(fraction.toFloat().coerceIn(0f, 1f))
+                .height(4.dp)
+                .background(MaterialTheme.colorScheme.primary),
         )
     }
 }

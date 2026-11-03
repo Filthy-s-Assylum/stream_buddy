@@ -1,20 +1,23 @@
-# Gradle
 .gradle/
 build/
+**/build/
+.kotlin/
 !gradle/wrapper/gradle-wrapper.jar
 
 # Android Studio / IntelliJ
 *.iml
 .idea/
 captures/
-.externalNativeBuild/
 .cxx/
+.externalNativeBuild/
 
 # Local machine configuration (SDK path, signing info, secrets)
 local.properties
 keystore.properties
 *.jks
 *.keystore
+.env
+opencode-termux.sh
 
 # Build output
 *.apk
@@ -23,6 +26,12 @@ keystore.properties
 *.dex
 *.class
 output-metadata.json
+
+# Staged release/debug APKs land here (see stageDebugApk / stageReleaseApk)
+dist/
+
+# Python link-finder tool
+tools/__pycache__/
 
 # OS / logs
 .DS_Store

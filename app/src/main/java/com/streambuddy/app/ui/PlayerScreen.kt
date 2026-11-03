@@ -1,236 +1,571 @@
 package com.streambuddy.app.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material3.ElevatedCard
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.media3.common.util.UnstableApi
-import androidx.media3.ui.PlayerView
-import com.streambuddy.app.data.StreamEntity
+import com.streambuddy.app.AppGraph
+import com.streambuddy.app.BuildConfig
+import com.streambuddy.app.ai.PrefetchPredictor
+import com.streambuddy.app.cache.CacheManager
+import com.streambuddy.app.data.AppSettings
 import com.streambuddy.app.util.Format
 
 /**
- * Cache-first playback (the ExoPlayer instance in [MainViewModel] reads through the same store that
- * pre-caching fills) plus a shortcut list of everything in the queue.
+ * Playback screen showing the current stream player UI.
  *
- * The [PlayerView] sits above the list instead of inside it: a LazyColumn would dispose the video
- * surface as soon as the queue scrolls it off screen.
+ * Settings values are read from [MainViewModel.settings], which is the shared
+ * encrypted [AppSettings] blob; writes go straight back to that same store, so
+ * every other reader (the VPN gate, the torrent engine, the player) sees them
+ * immediately.
  */
-@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 fun PlayerScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
-    val playback by viewModel.playback.collectAsStateWithLifecycle()
-    val streams by viewModel.streams.collectAsStateWithLifecycle()
-    val torrentFiles by viewModel.torrentFiles.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val cacheBytes by viewModel.cacheBytes.collectAsStateWithLifecycle()
+    val model by viewModel.modelState.collectAsStateWithLifecycle()
+    val predictions by viewModel.predictions.collectAsStateWithLifecycle()
+    val vpn by AppGraph.require().vpnMonitor.status.collectAsStateWithLifecycle()
 
-    Column(modifier = modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            SectionHeader(
-                title = "Player",
-                subtitle = "Anything that was pre-cached starts from disk; the rest streams and is " +
-                    "cached as it plays.",
-            )
-
-            if (playback.hasMedia) {
-                AndroidView(
-                    factory = { context ->
-                        PlayerView(context).apply {
-                            player = viewModel.player
-                            useController = true
-                        }
-                    },
-                    update = { view -> view.player = viewModel.player },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
-                        .clip(MaterialTheme.shapes.medium)
-                        .background(Color.Black),
-                )
-
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        text = playback.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = buildString {
-                            append(playback.kind.label)
-                            if (playback.durationMs > 0L) {
-                                append(" · ")
-                                append(Format.duration(playback.positionMs))
-                                append(" / ")
-                                append(Format.duration(playback.durationMs))
-                            }
-                            if (playback.isBuffering) append(" · buffering…")
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    playback.qualityNote?.let { note ->
-                        Text(
-                            text = "Quality: $note",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                    if (torrentFiles.size > 1) {
-                        Text(
-                            text = "Files in this torrent",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            torrentFiles.take(3).forEach { suggestion ->
-                                FilterChip(
-                                    selected = suggestion.file.index == playback.fileIndex,
-                                    onClick = { viewModel.playTorrentAlternative(suggestion.file.index) },
-                                    label = {
-                                        Text(
-                                            text = suggestion.file.advertisedHeight?.let { "${it}p" }
-                                                ?: suggestion.file.name.take(14),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    },
-                                )
-                            }
-                        }
-                    }
-                    playback.error?.let { error ->
-                        Text(
-                            text = error,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                }
-
-                val fraction = if (playback.durationMs > 0L) {
-                    (playback.positionMs.toFloat() / playback.durationMs.toFloat()).coerceIn(0f, 1f)
-                } else {
-                    0f
-                }
-                LinearProgressIndicator(
-                    progress = { fraction },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilledTonalButton(onClick = viewModel::togglePlayPause) {
-                        Icon(
-                            imageVector = Icons.Filled.PlayArrow,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Text(
-                            text = if (playback.isPlaying) "Pause" else "Play",
-                            modifier = Modifier.padding(start = 6.dp),
-                        )
-                    }
-                    OutlinedButton(onClick = viewModel::stopPlayback) { Text("Stop") }
-                }
-            } else {
-                ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-                    EmptyState(
-                        title = "Nothing playing",
-                        detail = "Pick a stream below, or press Play on an entry in the Queue tab.",
-                    )
-                }
-            }
-        }
-
-        Text(
-            text = "From your queue",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(horizontal = 16.dp),
-        )
-
-        LazyColumn(
-            modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            if (streams.isEmpty()) {
-                item {
-                    EmptyState(
-                        title = "Queue is empty",
-                        detail = "Add a stream on the Queue tab and it shows up here.",
-                    )
-                }
-            } else {
-                items(streams, key = { it.id }) { stream ->
-                    PlayerQueueRow(
-                        stream = stream,
-                        isCurrent = playback.streamId == stream.id,
-                        onClick = { viewModel.play(stream) },
-                    )
-                }
-            }
-        }
+    var confirmClear by remember { mutableStateOf(false) }
+    var confirmReset by remember { mutableStateOf(false) }
+    var keyVisible by remember { mutableStateOf(false) }
+    var notificationsEnabled by remember {
+        mutableStateOf(NotificationManagerCompat.from(context).areNotificationsEnabled())
     }
-}
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) {
+        notificationsEnabled = NotificationManagerCompat.from(context).areNotificationsEnabled()
+    }
 
-@Composable
-private fun PlayerQueueRow(stream: StreamEntity, isCurrent: Boolean, onClick: () -> Unit) {
-    ElevatedCard(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    LaunchedEffect(Unit) {
+        viewModel.refreshCacheUsage()
+        notificationsEnabled = NotificationManagerCompat.from(context).areNotificationsEnabled()
+    }
+
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            SectionHeader(
+                title = "Settings & boost",
+                subtitle = "Pre-caching is cache-first: everything you play also warms the cache.",
+            )
+        }
+
+        item {
+            SettingsSection(title = "Smart pre-cache") {
                 Text(
-                    text = stream.title,
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = if (isCurrent) "Now playing" else stream.progressDetail,
+                    text = "An on-device model learns from what you actually watch — series, " +
+                        "time of day, how often you finish — and pre-caches the next likely " +
+                        "play. It starts from hand-tuned priors and improves as you use the app.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (isCurrent) {
-                        MaterialTheme.colorScheme.primary
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                LabeledValueRow(
+                    label = "Status",
+                    value = when {
+                        !settings.smartPrefetch -> "Off"
+                        model.model.hasLearnedAnything -> "Personalised"
+                        else -> "Learning"
+                    },
+                    valueColor = if (settings.smartPrefetch) {
+                        MaterialTheme.colorScheme.secondary
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
                     },
                 )
+                LabeledValueRow(
+                    label = "Playbacks recorded",
+                    value = model.historyCount.toString(),
+                )
+                predictions.values.maxByOrNull { it.probability }?.let { top ->
+                    Text(
+                        text = "Next up: “${top.candidate.title}” (${top.percent}%) — " +
+                            (top.reasons.firstOrNull()?.detail ?: "no strong signal yet"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (settings.smartPrefetch) {
+                        FilledTonalButton(onClick = { viewModel.setSmartPrefetch(false) }) {
+                            Text("Turn off")
+                        }
+                    } else {
+                        OutlinedButton(onClick = { viewModel.setSmartPrefetch(true) }) {
+                            Text("Turn on")
+                        }
+                    }
+                    TextButton(onClick = viewModel::enhanceQueueNow) { Text("Enhance now") }
+                }
+                if (model.historyCount > 0 || model.model.hasLearnedAnything) {
+                    TextButton(onClick = { confirmReset = true }) { Text("Reset learning") }
+                }
+                Text(
+                    text = "Needs ${PrefetchPredictor.MIN_EVENTS_FOR_TRAINING} playbacks before it " +
+                        "starts adjusting the priors. History stays on this device.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-            TextButton(onClick = onClick) { Text(if (isCurrent) "Restart" else "Play") }
+        }
+
+        item {
+            SettingsSection(title = "Pre-play buffer") {
+                Text(
+                    text = "How much of each stream to cache before you press play " +
+                        "(currently ${settings.prefetchMinutes} min).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                AppSettings.PRESET_MINUTES.chunked(2).forEach { rowMinutes ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        rowMinutes.forEach { minutes ->
+                            val selected = settings.prefetchMinutes == minutes
+                            if (selected) {
+                                FilledTonalButton(
+                                    onClick = { viewModel.setPrefetchMinutes(minutes) },
+                                    modifier = Modifier.weight(1f),
+                                ) { Text("$minutes min") }
+                            } else {
+                                OutlinedButton(
+                                    onClick = { viewModel.setPrefetchMinutes(minutes) },
+                                    modifier = Modifier.weight(1f),
+                                ) { Text("$minutes min") }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            SettingsSection(title = "Cache quality") {
+                Text(
+                    text = "Which HLS variant to pre-cache. Playback still adapts to your network.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val lowSelected = !settings.preferHighestQuality
+                    if (lowSelected) {
+                        FilledTonalButton(
+                            onClick = { viewModel.setPreferHighestQuality(false) },
+                            modifier = Modifier.weight(1f),
+                        ) { Text("Data saver") }
+                    } else {
+                        OutlinedButton(
+                            onClick = { viewModel.setPreferHighestQuality(false) },
+                            modifier = Modifier.weight(1f),
+                        ) { Text("Data saver") }
+                    }
+
+                    if (!lowSelected) {
+                        FilledTonalButton(
+                            onClick = { viewModel.setPreferHighestQuality(true) },
+                            modifier = Modifier.weight(1f),
+                        ) { Text("Best quality") }
+                    } else {
+                        OutlinedButton(
+                            onClick = { viewModel.setPreferHighestQuality(true) },
+                            modifier = Modifier.weight(1f),
+                        ) { Text("Best quality") }
+                    }
+                }
+            }
+        }
+
+        item {
+            SettingsSection(title = "Storage") {
+                LabeledValueRow("Cached media", Format.bytes(cacheBytes))
+                val usedPercent = Format.percent(cacheBytes, CacheManager.MAX_BYTES)
+                if (usedPercent != null) {
+                    LinearProgressIndicator(
+                        progress = { usedPercent / 100f },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                Text(
+                    text = "Limit ${Format.bytes(CacheManager.MAX_BYTES)} — the least recently " +
+                        "used segments are evicted first.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = { confirmClear = true },
+                        enabled = cacheBytes > 0L,
+                    ) { Text("Clear cache") }
+                    TextButton(onClick = viewModel::refreshCacheUsage) { Text("Refresh") }
+                }
+            }
+        }
+
+        item {
+            SettingsSection(title = "Metadata") {
+                Text(
+                    text = "Stream Buddy does not ship a TMDB key. Use your own free TMDB API key " +
+                        "to load posters and descriptions. The key is encrypted with the Android " +
+                        "Keystore and never leaves this device.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = settings.tmdbApiKey,
+                    onValueChange = {
+                        AppGraph.require().settingsStore.update { s -> s.copy(tmdbApiKey = it.take(200)) }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("TMDB API key") },
+                    singleLine = true,
+                    visualTransformation = if (keyVisible) {
+                        androidx.compose.ui.text.input.VisualTransformation.None
+                    } else {
+                        androidx.compose.ui.text.input.PasswordVisualTransformation()
+                    },
+                    trailingIcon = {
+                        TextButton(onClick = { keyVisible = !keyVisible }) {
+                            Text(if (keyVisible) "Hide" else "Show")
+                        }
+                    },
+                )
+                OutlinedTextField(
+                    value = settings.preferredSubtitleLanguage,
+                    onValueChange = {
+                        AppGraph.require().settingsStore.update { s ->
+                            s.copy(preferredSubtitleLanguage = it.take(8))
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Preferred subtitle language (e.g. en)") },
+                    singleLine = true,
+                )
+            }
+        }
+
+        item {
+            SettingsSection(title = "Where to watch") {
+                Text(
+                    text = "Movie of the Night shows official streaming services, prices and deep " +
+                        "links. Use your own API key; it is encrypted with the Android Keystore and " +
+                        "only sent to api.movieofthenight.com. Release builds ship no key, so the " +
+                        "field starts empty.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = settings.motnApiKey,
+                    onValueChange = {
+                        AppGraph.require().settingsStore.update { s -> s.copy(motnApiKey = it.take(200)) }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Movie of the Night API key") },
+                    singleLine = true,
+                    visualTransformation = if (keyVisible) {
+                        VisualTransformation.None
+                    } else {
+                        androidx.compose.ui.text.input.PasswordVisualTransformation()
+                    },
+                    trailingIcon = {
+                        TextButton(onClick = { keyVisible = !keyVisible }) {
+                            Text(if (keyVisible) "Hide" else "Show")
+                        }
+                    },
+                )
+                OutlinedTextField(
+                    value = settings.motnCountry,
+                    onValueChange = {
+                        AppGraph.require().settingsStore.update { s -> s.copy(motnCountry = it.take(2)) }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Where-to-watch country (ISO 3166-1, e.g. us, gb)") },
+                    singleLine = true,
+                )
+            }
+        }
+
+        item {
+            SettingsSection(title = "VPN") {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (vpn.active) {
+                            MaterialTheme.colorScheme.surface
+                        } else {
+                            MaterialTheme.colorScheme.errorContainer
+                        },
+                    ),
+                ) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text(
+                            if (vpn.active) "Protected route" else "VPN not detected",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (vpn.active) {
+                                MaterialTheme.colorScheme.onSurface
+                            } else {
+                                MaterialTheme.colorScheme.onErrorContainer
+                            },
+                        )
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            vpn.summary,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (vpn.active) {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            } else {
+                                MaterialTheme.colorScheme.onErrorContainer
+                            },
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { AppGraph.require().vpnMonitor.refresh() }) {
+                                Text("Check again")
+                            }
+                            TextButton(onClick = {
+                                val intent = Intent(Settings.ACTION_VPN_SETTINGS)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                val opened = runCatching { context.startActivity(intent) }.isSuccess
+                                if (!opened) {
+                                    runCatching {
+                                        context.startActivity(
+                                            Intent(Settings.ACTION_SETTINGS)
+                                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                        )
+                                    }
+                                }
+                            }) { Text("Open VPN settings") }
+                        }
+                    }
+                }
+                ToggleRow(
+                    title = "Require VPN for all network access",
+                    detail = "On by default. Torrents, playback, metadata lookups, posters, the " +
+                        "built-in browser, page scans and downloads all refuse to start, and active " +
+                        "playback or downloads pause, when this app is not routed through your VPN. " +
+                        "Local files and completed offline downloads are always allowed. Stream " +
+                        "Buddy does not provide a VPN; use a trusted system VPN and make sure " +
+                        "Stream Buddy is not excluded from it.",
+                    checked = settings.requireVpnForNetwork,
+                    onCheckedChange = { enabled ->
+                        AppGraph.require().settingsStore.update { it.copy(requireVpnForNetwork = enabled) }
+                    },
+                )
+            }
+        }
+
+        item {
+            SettingsSection(title = "Privacy and security") {
+                ToggleRow(
+                    title = "Block screenshots and screen recording",
+                    detail = "Sets FLAG_SECURE on the app window. Recommended when your library " +
+                        "or sources are private.",
+                    checked = settings.blockScreenshots,
+                    onCheckedChange = { enabled ->
+                        AppGraph.require().settingsStore.update { it.copy(blockScreenshots = enabled) }
+                    },
+                )
+                Text(
+                    text = "Library titles, attached sources, the TMDB key and playback history " +
+                        "are encrypted with AES-256-GCM keys held by the Android Keystore. Android " +
+                        "backup and device-to-device transfer are disabled for app data. Torrent " +
+                        "piece traffic uses forced RC4 peer encryption and the local streaming " +
+                        "server only listens on 127.0.0.1 with a random token.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = "Peer encryption protects Stream Buddy↔peer connections. It cannot " +
+                        "hide your IP from the swarm or encrypt metadata you publish to " +
+                        "trackers/DHT, which is why the VPN requirement is on by default. Stream " +
+                        "Buddy does not bypass DRM, paywalls or region locks.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        item {
+            SettingsSection(title = "Notifications") {
+                LabeledValueRow(
+                    label = "Pre-cache progress",
+                    value = if (notificationsEnabled) "Enabled" else "Blocked",
+                    valueColor = if (notificationsEnabled) {
+                        MaterialTheme.colorScheme.secondary
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    },
+                )
+                Text(
+                    text = "Caching runs in the background; a low-priority notification shows " +
+                        "its progress.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (!notificationsEnabled) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            OutlinedButton(
+                                onClick = {
+                                    val granted = ContextCompat.checkSelfPermission(
+                                        context,
+                                        Manifest.permission.POST_NOTIFICATIONS,
+                                    ) == PackageManager.PERMISSION_GRANTED
+                                    if (granted) {
+                                        notificationsEnabled = true
+                                    } else {
+                                        permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    }
+                                },
+                            ) { Text("Allow") }
+                        }
+                        TextButton(onClick = { openNotificationSettings(context) }) {
+                            Text("System settings")
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            SettingsSection(title = "About") {
+                LabeledValueRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+                Text(
+                    text = "DRM-protected services (Netflix, Disney+, Prime Video, …) can only " +
+                        "play inside their own apps. Streams protected by FairPlay, Widevine or " +
+                        "PlayReady are detected and never cached.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = "DASH (.mpd) streams play cache-first but are not pre-cached; HLS " +
+                        "(.m3u8) and direct media files are.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
+
+    if (confirmReset) {
+        AlertDialog(
+            onDismissRequest = { confirmReset = false },
+            title = { Text("Reset what was learned?") },
+            text = {
+                Text(
+                    "Deletes the watch history and the learned weights. Pre-caching falls back " +
+                        "to the built-in defaults until it has enough playbacks again.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.resetLearning()
+                        confirmReset = false
+                    },
+                ) { Text("Reset") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmReset = false }) { Text("Keep") }
+            },
+        )
+    }
+
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("Clear cached media?") },
+            text = {
+                Text(
+                    "Removes ${Format.bytes(cacheBytes)} of cached segments. Playback will " +
+                        "start from the network again.",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.clearCache()
+                        confirmClear = false
+                    },
+                ) { Text("Clear") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClear = false }) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+/** Label on the left, switch on the right, with an explanatory line underneath. */
+@Composable
+private fun ToggleRow(
+    title: String,
+    detail: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+private fun openNotificationSettings(context: Context) {
+    val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+            .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+    } else {
+        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+            .setData(Uri.parse("package:${context.packageName}"))
+    }
+    runCatching { context.startActivity(intent) }
 }

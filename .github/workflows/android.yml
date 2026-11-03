@@ -65,7 +65,7 @@ jobs:
         run: |
           if [ -n "$KEYSTORE_BASE64" ]; then
             printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
-            echo "STREAMBUDDY_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "RELEASE_STORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
             echo "Release keystore configured."
           else
             echo "No STREAMBUDDY_KEYSTORE_BASE64 secret; the release build will be unsigned."
@@ -77,9 +77,9 @@ jobs:
           set -o pipefail
           ./gradlew assembleRelease bundleRelease --stacktrace --console=plain 2>&1 | tee release.log
         env:
-          STREAMBUDDY_KEYSTORE_PASS: ${{ secrets.STREAMBUDDY_KEYSTORE_PASS }}
-          STREAMBUDDY_KEY_ALIAS: ${{ secrets.STREAMBUDDY_KEY_ALIAS }}
-          STREAMBUDDY_KEY_PASS: ${{ secrets.STREAMBUDDY_KEY_PASS }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.STREAMBUDDY_KEYSTORE_PASS }}
+          RELEASE_KEY_ALIAS: ${{ secrets.STREAMBUDDY_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.STREAMBUDDY_KEY_PASS }}
 
       # Compiler output is not readable from outside Actions, so surface it as check-run
       # annotations (which are readable through the API).

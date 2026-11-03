@@ -1,0 +1,81 @@
+name: Android Release APK
+
+# Builds a signed, installable release APK and publishes it to dist/.
+#
+# Signing secrets (set them in Settings -> Secrets and variables -> Actions):
+#   RELEASE_STORE_FILE_BASE64  base64 of the .jks/.keystore file
+#   RELEASE_STORE_PASSWORD     keystore password
+#   RELEASE_KEY_ALIAS          key alias
+#   RELEASE_KEY_PASSWORD       key password
+#
+# If the secrets are absent the Gradle build falls back to debug signing, so
+# the workflow still produces an installable APK (never an unsigned one) and
+# says so in the summary.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run unit tests
+        run: ./gradlew testDebugUnitTest --no-daemon --stacktrace
+
+      - name: Build signed release APK
+        env:
+          RELEASE_STORE_FILE_BASE64: ${{ secrets.RELEASE_STORE_FILE_BASE64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: ./gradlew :app:verifyReleaseSigned --no-daemon --stacktrace
+
+      - name: Confirm the APK is installable
+        run: |
+          set -euo pipefail
+          ls -lh dist/
+          test -n "$(find dist -name '*release*.apk' ! -name '*unsigned*')"
+          APK="$(find dist -name '*release*.apk' ! -name '*unsigned*' | head -n1)"
+          echo "APK=$APK" >> "$GITHUB_ENV"
+          # Prove it is signed, so it actually installs on a device. keytool ships
+          # with the JDK we just configured, so this does not depend on SDK paths.
+          keytool -printcert -jarfile "$APK"
+
+      - name: Upload release APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: stream-buddy-release-apk
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Attach APK to the release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.apk
+          generate_release_notes: true

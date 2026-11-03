@@ -5,10 +5,9 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.annotation.StringRes
@@ -54,6 +53,17 @@ import com.streambuddy.app.ui.StreamBuddyTheme
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
+/**
+ * Single entry point. It accepts:
+ *
+ *  - ACTION_VIEW with a magnet link;
+ *  - ACTION_VIEW with a local video (content:// or file://);
+ *  - ACTION_SEND text containing a magnet or an http(s) media link.
+ *
+ * Nothing is added or played silently: the shared link goes to a confirmation
+ * dialog in [StreamBuddyRoot]. Playback only ever uses sources the user
+ * attached to their own library entries.
+ */
 class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
@@ -68,6 +78,14 @@ class MainActivity : ComponentActivity() {
                 StreamBuddyApp(viewModel = viewModel)
             }
         }
+
+        setContent {
+            StreamBuddyRoot(
+                container = AppGraph.require(),
+                sharedSource = pendingShared,
+                onSharedSourceHandled = { pendingShared = null },
+            )
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -76,30 +94,75 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
     }
 
-    /**
-     * Turns a share sheet payload, a `streambuddy://` deep link or a pre-cache notification tap
-     * into a view-model request. Unknown intents leave the app on its normal start screen.
-     */
-    private fun handleIntent(intent: Intent?) {
-        intent ?: return
+    override fun onResume() {
+        super.onResume()
+        AppGraph.containerOrNull()?.vpnMonitor?.refresh()
+    }
 
-        // Notification tap: jump straight to the stream it was caching.
-        val streamId = intent.getLongExtra(PreCacheWorker.EXTRA_OPEN_STREAM_ID, NO_STREAM_ID)
-        if (streamId != NO_STREAM_ID) {
-            viewModel.focusStream(streamId)
-            return
+    private fun applySecureFlag(secure: Boolean) {
+        if (secure) {
+            window.setFlags(
+                WindowManager.LayoutParams.FLAG_SECURE,
+                WindowManager.LayoutParams.FLAG_SECURE,
+            )
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
         }
+    }
 
-        val sharedText = when (intent.action) {
-            Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT)
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val granted = checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            runCatching {
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
+            }
+        }
+    }
+
+    private fun extractShared(intent: Intent?): SharedSource? {
+        if (intent == null) return null
+        return when (intent.action) {
+            Intent.ACTION_VIEW -> {
+                val data = intent.data ?: return null
+                val value = data.toString().trim()
+                when {
+                    value.startsWith("magnet:", ignoreCase = true) ->
+                        SharedSource(value, null)
+
+                    data.scheme.equals("content", true) || data.scheme.equals("file", true) -> {
+                        // Keep read access across restarts for a picked file.
+                        runCatching {
+                            contentResolver.takePersistableUriPermission(
+                                data,
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                            )
+                        }
+                        SharedSource(value, data.lastPathSegment)
+                    }
+
+                    value.startsWith("http://", true) || value.startsWith("https://", true) ->
+                        if (validateSource(value) == null) {
+                            SharedSource(value, data.lastPathSegment)
+                        } else {
+                            null
+                        }
+
+                    else -> null
+                }
+            }
+
+            Intent.ACTION_SEND -> {
+                val text = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim() ?: return null
+                val magnet = MAGNET_PATTERN.find(text)?.value
+                if (magnet != null) return SharedSource(magnet, null)
+                val url = URL_PATTERN.find(text)?.value?.trimEnd('.', ',', ')', ']', '}', '>', '"', '\'')
+                if (url != null && validateSource(url) == null) SharedSource(url, null) else null
+            }
+
             else -> null
         }
-        val target = SharedLink.parse(
-            action = intent.action,
-            dataString = intent.dataString,
-            sharedText = sharedText,
-        )
-        viewModel.handleSharedLink(target)
     }
 
     override fun onStop() {
@@ -109,7 +172,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private companion object {
-        const val NO_STREAM_ID = -1L
+        const val REQUEST_NOTIFICATIONS = 7101
+        val MAGNET_PATTERN = Regex("magnet:\\?[^\\s]+", RegexOption.IGNORE_CASE)
+        val URL_PATTERN = Regex("https?://[^\\s]+", RegexOption.IGNORE_CASE)
     }
 }
 
@@ -187,40 +252,6 @@ private fun StreamBuddyApp(viewModel: MainViewModel, modifier: Modifier = Modifi
             }
             composable("player") { PlayerScreen(viewModel = viewModel) }
             composable("settings") { SettingsScreen(viewModel = viewModel) }
-        }
-    }
-}
-
-private fun NavHostController.switchTab(route: String) {
-    navigate(route) {
-        popUpTo(graph.findStartDestination().id) { saveState = true }
-        launchSingleTop = true
-        restoreState = true
-    }
-}
-
-/**
- * Asks for POST_NOTIFICATIONS once on Android 13+, so pre-cache progress notifications are
- * visible. Skipped entirely when the permission is already granted.
- */
-@Composable
-private fun RequestNotificationPermissionOnce() {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
-
-    val context = LocalContext.current
-    val repository = remember { SettingsRepository.get(context) }
-    val launcher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { /* Progress notifications simply stay hidden when denied. */ }
-
-    LaunchedEffect(Unit) {
-        val granted = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.POST_NOTIFICATIONS,
-        ) == PackageManager.PERMISSION_GRANTED
-        if (!granted && repository.shouldRequestNotificationPermission()) {
-            repository.markNotificationPermissionAsked()
-            launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 }
