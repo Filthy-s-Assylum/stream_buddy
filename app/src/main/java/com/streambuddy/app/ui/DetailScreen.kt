@@ -518,7 +518,7 @@ fun validateSource(value: String): String? {
     val host = uri.host.lowercase()
     return when {
         host == "streamtape.com" || host == "dood.co" || host == "dood.to" || host == "uptobox.com" || host == "uptobox.net" -> null
-        host endsWith(".piratebay") || host == "1337x" || host.endsWith("rarbg") || host == "yts" || host == "eztv" -> null
+        host.endsWith(".piratebay") || host == "1337x" || host.endsWith("rarbg") || host == "yts" || host == "eztv" -> null
         else -> null
     }
 }
