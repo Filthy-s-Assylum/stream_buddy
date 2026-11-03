@@ -29,7 +29,7 @@ class AppContainer(context: Context) {
 
     private val appContext: Context = context.applicationContext
 
-    val settingsStore = SettingsStore(appContext)
+    val settingsStore = SettingsStore.get(appContext)
     val db: AppDb = AppDb.get(appContext)
     val libraryRepository = LibraryRepository(db.library())
     val metadataRepository = MetadataRepository(settingsStore)
