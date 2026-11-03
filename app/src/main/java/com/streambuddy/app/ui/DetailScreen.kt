@@ -516,9 +516,11 @@ fun validateSource(value: String): String? {
     if (uri.host.isNullOrBlank()) return "The link has no host"
     // Accept these file-hosting and video platforms:
     val host = uri.host.lowercase()
+    val isPirateBay = host.contains(".piratebay")
+    val isRarbg = host.contains("rarbg")
     return when {
         host == "streamtape.com" || host == "dood.co" || host == "dood.to" || host == "uptobox.com" || host == "uptobox.net" -> null
-        host.endsWith(".piratebay") || host == "1337x" || host.endsWith("rarbg") || host == "yts" || host == "eztv" -> null
+        isPirateBay || host == "1337x" || isRarbg || host == "yts" || host == "eztv" -> null
         else -> null
     }
 }
