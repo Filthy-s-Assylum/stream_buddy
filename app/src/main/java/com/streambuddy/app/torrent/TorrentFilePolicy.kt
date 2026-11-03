@@ -80,6 +80,10 @@ object TorrentFilePolicy {
             if (segment.endsWith(' ') || segment.endsWith('.')) {
                 return rejected("File name ends with a space or dot")
             }
+            val base = segment.substringBeforeLast('.')
+            if (base.endsWith(' ') || base.endsWith('.')) {
+                return rejected("File name has a trailing space or dot before the extension")
+            }
             if (segment.any { it in ILLEGAL_CHARACTERS }) return rejected("File name has illegal characters")
             val stem = segment.substringBefore('.').lowercase(Locale.US)
             if (stem in WINDOWS_RESERVED) return rejected("Reserved file name")
