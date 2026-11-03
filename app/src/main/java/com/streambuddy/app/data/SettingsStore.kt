@@ -147,13 +147,31 @@ class SettingsStore private constructor(context: Context) {
 
     fun current(): AppSettings = _settings.value
 
-    fun update(transform: (AppSettings) -> AppSettings): AppSettings {
-        synchronized(this) {
-            val updated = transform(_settings.value).sanitized()
-            runCatching { prefs.putString(KEY, updated.encode()) }
-            _settings.value = updated
-            return updated
+    fun update(transform: (AppSettings) -> AppSettings): AppSettings =
+        updateInternal(transform) { encoded ->
+            runCatching {
+                prefs.putString(KEY, encoded)
+                true
+            }.getOrDefault(false)
+        }.first
+
+    internal fun updateWithPersistenceStatus(
+        transform: (AppSettings) -> AppSettings,
+    ): Pair<AppSettings, Boolean> =
+        updateInternal(transform) { encoded ->
+            runCatching {
+                prefs.putStringAndCommit(KEY, encoded)
+            }.getOrDefault(false)
         }
+
+    private fun updateInternal(
+        transform: (AppSettings) -> AppSettings,
+        persist: (String) -> Boolean,
+    ): Pair<AppSettings, Boolean> = synchronized(this) {
+        val updated = transform(_settings.value).sanitized()
+        val persisted = persist(updated.encode())
+        _settings.value = updated
+        updated to persisted
     }
 
     fun clear() {
