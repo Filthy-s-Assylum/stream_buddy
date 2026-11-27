@@ -268,7 +268,7 @@ fun DownloadsScreen(
                             refreshTick++
                         },
                         onRetry = {
-                            runCatching { Downloads.retry(context, download.request.id) }
+                            runCatching { Downloads.retry(context, download) }
                                 .onFailure { actionError = it.message }
                             refreshTick++
                         },

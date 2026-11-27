@@ -452,7 +452,7 @@ fun DetailScreen(
 
                                 Download.STATE_FAILED -> TextButton(
                                     onClick = {
-                                        runCatching { Downloads.retry(context, currentDownload.request.id) }
+                                        runCatching { Downloads.retry(context, currentDownload) }
                                         downloadTick++
                                     },
                                     enabled = !vpnBlocked,
