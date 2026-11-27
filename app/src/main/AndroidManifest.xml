@@ -56,27 +56,14 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data
-                    android:host="queue"
-                    android:scheme="streambuddy" />
-                <data
-                    android:host="library"
-                    android:scheme="streambuddy" />
-                <data
-                    android:host="browser"
-                    android:scheme="streambuddy" />
-                <data
-                    android:host="apps"
-                    android:scheme="streambuddy" />
-                <data
-                    android:host="storage"
-                    android:scheme="streambuddy" />
-                <data
-                    android:host="player"
-                    android:scheme="streambuddy" />
-                <data
-                    android:host="settings"
-                    android:scheme="streambuddy" />
+                <data android:scheme="streambuddy" />
+                <data android:host="queue" />
+                <data android:host="library" />
+                <data android:host="browser" />
+                <data android:host="apps" />
+                <data android:host="storage" />
+                <data android:host="player" />
+                <data android:host="settings" />
             </intent-filter>
 
             <!-- A magnet: link handed over by a browser, another app or a deep link. -->
