@@ -35,12 +35,12 @@ class TmdbClient(
             addQueryParameter("language", "en-US")
         }
         val body = fetch(url)
-        parseList(body.optJSONArray("results"), allowPeople = true)
+        parseList(body.optJSONArray("results"))
     }
 
     suspend fun trending(): Result<List<MetadataCandidate>> = request {
         val url = buildUrl("trending/all/week") { addQueryParameter("language", "en-US") }
-        parseList(fetch(url).optJSONArray("results"), allowPeople = true)
+        parseList(fetch(url).optJSONArray("results"))
     }
 
     /** Movies currently in cinemas. */
@@ -49,7 +49,7 @@ class TmdbClient(
             addQueryParameter("language", "en-US")
             addQueryParameter("page", "1")
         }
-        parseList(fetch(url).optJSONArray("results"), allowPeople = false)
+        parseList(fetch(url).optJSONArray("results"), fallbackType = MediaType.MOVIE)
     }
 
     /** Films with a release date in the near future. */
@@ -58,7 +58,7 @@ class TmdbClient(
             addQueryParameter("language", "en-US")
             addQueryParameter("page", "1")
         }
-        parseList(fetch(url).optJSONArray("results"), allowPeople = false)
+        parseList(fetch(url).optJSONArray("results"), fallbackType = MediaType.MOVIE)
     }
 
     /** Episodes airing this week on TV. */
@@ -67,7 +67,7 @@ class TmdbClient(
             addQueryParameter("language", "en-US")
             addQueryParameter("page", "1")
         }
-        parseList(fetch(url).optJSONArray("results"), allowPeople = false)
+        parseList(fetch(url).optJSONArray("results"), fallbackType = MediaType.TV)
     }
 
     suspend fun details(candidate: MetadataCandidate): Result<MetadataCandidate> = request {
@@ -96,16 +96,18 @@ class TmdbClient(
         json.optString("imdb_id").trim().takeIf { it.matches(IMDB_ID_PATTERN) }
     }
 
-    private fun parseList(array: JSONArray?, allowPeople: Boolean): List<MetadataCandidate> {
+    private fun parseList(
+        array: JSONArray?,
+        fallbackType: MediaType? = null,
+    ): List<MetadataCandidate> {
         if (array == null) return emptyList()
         val results = ArrayList<MetadataCandidate>(array.length())
         for (index in 0 until array.length()) {
             val json = array.optJSONObject(index) ?: continue
-            val type = json.optString("media_type")
-            val mediaType = when (type) {
+            val mediaType = when (json.optString("media_type")) {
                 "movie" -> MediaType.MOVIE
                 "tv" -> MediaType.TV
-                else -> if (allowPeople) null else null
+                else -> fallbackType
             } ?: continue
             val id = json.optInt("id", 0)
             if (id <= 0) continue
