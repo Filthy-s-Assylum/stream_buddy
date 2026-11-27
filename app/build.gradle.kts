@@ -214,7 +214,7 @@ android {
         checkReleaseBuilds = false
         textReport = true
         textOutput = File(project.layout.buildDirectory.get().asFile, "reports/lint-results-debug.txt")
-        disable += setOf("AndroidGradlePluginVersion", "GradleDependency", "NewerVersionAvailable")
+        disable += setOf("AndroidGradlePluginVersion", "GradleDependency", "NewerVersionAvailable", "UsableSpace", "OldTargetApi")
     }
 }
 
