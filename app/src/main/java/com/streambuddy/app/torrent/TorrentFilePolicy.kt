@@ -126,13 +126,12 @@ object TorrentFilePolicy {
         )
     }
 
-    fun playableMediaFiles(files: List<SafeTorrentFile>): List<SafeTorrentFile> =
-        files
-            .filter { it.playable && it.rejection == null }
-            .sortedWith(
-                compareBy<SafeTorrentFile> { isSample(it) }
-                    .thenBy { (it.safePath ?: it.path).lowercase(Locale.US) },
-            )
+    fun playableMediaFiles(files: List<SafeTorrentFile>): List<SafeTorrentFile> {
+        val playable = files.filter { it.playable && it.rejection == null }
+        val nonSamples = playable.filterNot { isSample(it) }
+        val pool = if (nonSamples.isNotEmpty()) nonSamples else playable
+        return pool.sortedBy { (it.safePath ?: it.path).lowercase(Locale.US) }
+    }
 
     private fun advertisedHeight(name: String): Int? =
         RESOLUTION_PATTERN.find(name)?.let { match ->
