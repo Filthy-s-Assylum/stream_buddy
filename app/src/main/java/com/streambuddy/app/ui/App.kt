@@ -571,7 +571,33 @@ fun StreamBuddyRoot(
                                     onOpenSettings = { tab = AppTab.SETTINGS },
                                     torrentDownload = torrentDownload,
                                     onCancelTorrentDownload = { container.torrentDownloadManager.cancel() },
-                                    onPlayTorrentDownload = { path -> playDownloaded(null, path) },
+                                    onPlayTorrentDownload = { path ->
+                                        val parts = torrentDownload.itemKey.split('-', limit = 2)
+                                        val tmdbId = parts.getOrNull(1)?.toLongOrNull()
+                                        val mediaType = parts.getOrNull(0)?.let {
+                                            runCatching { MediaType.valueOf(it) }.getOrNull()
+                                        }
+                                        val existing = if (tmdbId != null && mediaType != null) {
+                                            items.firstOrNull { it.tmdbId == tmdbId && it.mediaType == mediaType }
+                                        } else {
+                                            null
+                                        }
+                                        if (existing != null) {
+                                            scope.launch {
+                                                val file = java.io.File(path)
+                                                container.libraryRepository.attachSource(
+                                                    id = existing.id,
+                                                    sourceUri = Uri.fromFile(file).toString(),
+                                                    label = "Downloaded · ${file.name}",
+                                                    infoHash = null,
+                                                )
+                                                container.libraryRepository.find(existing.id)
+                                                    ?.let { openPlayer(it, null) }
+                                            }
+                                        } else {
+                                            playDownloaded(null, path)
+                                        }
+                                    },
                                 )
 
                                 AppTab.SETTINGS -> SettingsScreen(
@@ -669,6 +695,8 @@ fun StreamBuddyRoot(
                         onSharedSourceHandled()
                         addOpen = false
                         playerOpen = false
+                        catalogItem = null
+                        showLatestCatalog = false
                         tab = AppTab.LIBRARY
                         detailId = id
                     }
