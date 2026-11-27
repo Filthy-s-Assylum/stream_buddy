@@ -14,8 +14,9 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -29,6 +30,7 @@ import com.streambuddy.app.data.LibraryRepository
 import com.streambuddy.app.data.SettingsStore
 import com.streambuddy.app.data.StreamKind
 import com.streambuddy.app.download.Downloads
+import com.streambuddy.app.net.Http
 import com.streambuddy.app.net.VpnMonitor
 import com.streambuddy.app.net.VpnRequiredMessage
 import com.streambuddy.app.optimizer.OptimizerRuntime
@@ -44,6 +46,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
+import java.util.Locale
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -97,12 +100,8 @@ class PlayerEngine(
         maxBufferMs = settingsStore.current().bufferTargetSeconds * 1_000,
     )
 
-    private val httpFactory: DefaultHttpDataSource.Factory = DefaultHttpDataSource.Factory()
+    private val httpFactory: HttpDataSource.Factory = OkHttpDataSource.Factory(Http.mediaClient)
         .setUserAgent("StreamBuddy/1.0 (Android)")
-        .setConnectTimeoutMs(20_000)
-        .setReadTimeoutMs(30_000)
-        // Do not let an https source redirect playback to cleartext http.
-        .setAllowCrossProtocolRedirects(false)
 
     private val cachedMediaSourceFactory: MediaSource.Factory = run {
         val cache = PlaybackCache.get(
@@ -147,6 +146,7 @@ class PlayerEngine(
     private var appliedMinBuffer = -1
     private var appliedMaxBuffer = -1
     private var lastProgressSave = 0L
+    private var lastCacheSampleAt = 0L
 
     private data class Active(
         val item: LibraryItem,
@@ -274,10 +274,14 @@ class PlayerEngine(
             vpnMonitor.status.collect { status ->
                 val session = active ?: return@collect
                 if (!settingsStore.current().requireVpnForNetwork) return@collect
-                if (!status.active && session.requiresVpn && player.isPlaying) {
+                val activePlayback = player.isPlaying || player.playWhenReady ||
+                    _state.value.preparing || _state.value.buffering
+                if (!status.active && session.requiresVpn && activePlayback) {
                     player.pause()
                     _state.value = _state.value.copy(
+                        preparing = false,
                         playing = false,
+                        buffering = false,
                         error = VpnRequiredMessage.playback,
                     )
                 } else if (status.active && _state.value.error == VpnRequiredMessage.playback) {
@@ -350,11 +354,12 @@ class PlayerEngine(
         )
 
         playJob = scope.launch {
-            if (isMagnet || isTorrentFile) {
+            if (isMagnet || torrentFile != null) {
                 val result = if (isMagnet) {
                     torrentManager.open(uri, fraction)
                 } else {
-                    torrentManager.openTorrentFile(torrentFile!!, fraction)
+                    val file = torrentFile ?: return@launch
+                    torrentManager.openTorrentFile(file, fraction)
                 }
                 val open = result.getOrElse { error ->
                     _state.value = _state.value.copy(
@@ -450,7 +455,7 @@ class PlayerEngine(
             builder.setSubtitleConfigurations(
                 subtitles.map { subtitle ->
                     MediaItem.SubtitleConfiguration.Builder(Uri.parse(subtitle.url))
-                        .setMimeType(MimeTypes.TEXT_VTT)
+                        .setMimeType(subtitleMimeType(subtitle.label))
                         .setLabel(subtitle.label)
                         .setLanguage(subtitle.label.substringBefore('.').take(8))
                         .build()
@@ -477,9 +482,14 @@ class PlayerEngine(
     }
 
     fun retry() {
-        if (active == null) return
+        val session = active ?: return
+        if (session.requiresVpn && settingsStore.current().requireVpnForNetwork && !vpnMonitor.isActive()) {
+            _state.value = _state.value.copy(error = VpnRequiredMessage.playback, preparing = false)
+            return
+        }
         _state.value = _state.value.copy(error = null, preparing = true)
         player.prepare()
+        player.playWhenReady = true
     }
 
     fun togglePlay() {
@@ -582,11 +592,18 @@ class PlayerEngine(
         runCatching { Downloads.setWifiOnly(context, settings.wifiOnlyDownloads) }
 
         val session = active
+        val activePlayback = player.isPlaying || player.playWhenReady ||
+            _state.value.preparing || _state.value.buffering
         if (session != null && settings.requireVpnForNetwork && session.requiresVpn &&
-            !vpnMonitor.isActive() && player.isPlaying
+            !vpnMonitor.isActive() && activePlayback
         ) {
             player.pause()
-            _state.value = _state.value.copy(playing = false, error = VpnRequiredMessage.playback)
+            _state.value = _state.value.copy(
+                preparing = false,
+                playing = false,
+                buffering = false,
+                error = VpnRequiredMessage.playback,
+            )
         }
     }
 
@@ -605,8 +622,17 @@ class PlayerEngine(
     private fun tick() {
         if (active == null) return
         val now = System.currentTimeMillis()
+        if (now - lastCacheSampleAt >= CACHE_SAMPLE_MS) {
+            lastCacheSampleAt = now
+            scope.launch(Dispatchers.IO) {
+                runCatching {
+                    val usage = PlaybackCache.usage(context)
+                    analytics.updateCacheUsage(usage.bytes, usage.maxBytes)
+                }
+            }
+        }
         val torrentState = torrentManager.state.value
-        val snapshot = analytics.snapshot(player, torrentState, context, refreshCache = true)
+        val snapshot = analytics.snapshot(player, torrentState, context, refreshCache = false)
         _stats.value = snapshot
 
         val duration = player.duration.takeIf { it > 0 } ?: _state.value.durationMs
@@ -764,8 +790,18 @@ class PlayerEngine(
             ?: "Subtitle"
     }
 
+    private fun subtitleMimeType(label: String): String = when (
+        label.substringAfterLast('.', "").lowercase(Locale.US)
+    ) {
+        "srt" -> MimeTypes.APPLICATION_SUBRIP
+        "ass", "ssa" -> MimeTypes.TEXT_SSA
+        "ttml", "dfxp" -> MimeTypes.APPLICATION_TTML
+        else -> MimeTypes.TEXT_VTT
+    }
+
     private companion object {
         const val PROGRESS_SAVE_MS = 5_000L
+        const val CACHE_SAMPLE_MS = 5_000L
         const val TORRENT_FILE_SCHEME = "torrent-file://"
     }
 }

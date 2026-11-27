@@ -2,13 +2,13 @@ package com.streambuddy.app.torrent
 
 import android.os.SystemClock
 import android.util.Log
+import kotlinx.coroutines.delay
 import org.libtorrent4j.AddTorrentParams
 import org.libtorrent4j.AlertListener
 import org.libtorrent4j.Priority
 import org.libtorrent4j.SessionManager
 import org.libtorrent4j.SessionParams
 import org.libtorrent4j.SettingsPack
-import org.libtorrent4j.Sha1Hash
 import org.libtorrent4j.TorrentFlags
 import org.libtorrent4j.TorrentHandle
 import org.libtorrent4j.TorrentInfo
@@ -130,17 +130,17 @@ class LibtorrentEngine {
         session.swig().async_add_torrent(params.swig())
     }
 
-    fun awaitHandle(timeoutMs: Long): TorrentHandle? {
+    suspend fun awaitHandle(timeoutMs: Long): TorrentHandle? {
         val deadline = SystemClock.elapsedRealtime() + timeoutMs
         while (SystemClock.elapsedRealtime() < deadline) {
             handleRef.get()?.let { if (it.isValid) return it }
             lastError?.let { return null }
-            Thread.sleep(POLL_MS)
+            delay(POLL_MS)
         }
         return handleRef.get()?.takeIf { it.isValid }
     }
 
-    fun awaitMetadata(timeoutMs: Long): Result<TorrentInfo> {
+    suspend fun awaitMetadata(timeoutMs: Long): Result<TorrentInfo> {
         val handle = awaitHandle(timeoutMs) ?: return Result.failure(
             TorrentException(lastError ?: "The tracker did not return the torrent. Check the magnet and try again."),
         )
@@ -152,7 +152,7 @@ class LibtorrentEngine {
                 val info = runCatching { handle.torrentFile() }.getOrNull()
                 if (info != null && info.isValid) return Result.success(info)
             }
-            Thread.sleep(POLL_MS)
+            delay(POLL_MS)
         }
         return Result.failure(
             TorrentException(
@@ -245,22 +245,52 @@ class LibtorrentEngine {
         endExclusive: Long,
         timeoutMs: Long,
     ): Boolean {
-        if (pieceLength <= 0 || endExclusive <= start) return true
-        val first = (start / pieceLength).toInt()
-        val last = ((endExclusive - 1) / pieceLength).toInt()
+        val pieces = pieceBounds(handle, pieceLength, start, endExclusive) ?: return true
         val deadline = SystemClock.elapsedRealtime() + timeoutMs
         while (SystemClock.elapsedRealtime() < deadline) {
-            var ready = true
-            for (piece in first..last) {
-                if (!havePiece(handle, piece)) {
-                    ready = false
-                    break
-                }
-            }
-            if (ready) return true
+            if (hasAllPieces(handle, pieces)) return true
             Thread.sleep(RANGE_POLL_MS)
         }
-        return (first..last).all { havePiece(handle, it) }
+        return hasAllPieces(handle, pieces)
+    }
+
+    /** Coroutine-friendly counterpart to [awaitRange] for initial buffer readiness. */
+    suspend fun awaitRangeSuspending(
+        handle: TorrentHandle,
+        pieceLength: Long,
+        start: Long,
+        endExclusive: Long,
+        timeoutMs: Long,
+    ): Boolean {
+        val pieces = pieceBounds(handle, pieceLength, start, endExclusive) ?: return true
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        while (SystemClock.elapsedRealtime() < deadline) {
+            if (hasAllPieces(handle, pieces)) return true
+            delay(RANGE_POLL_MS)
+        }
+        return hasAllPieces(handle, pieces)
+    }
+
+    private fun pieceBounds(
+        handle: TorrentHandle,
+        pieceLength: Long,
+        start: Long,
+        endExclusive: Long,
+    ): IntRange? {
+        if (pieceLength <= 0 || endExclusive <= start) return null
+        val info = runCatching { handle.torrentFile() }.getOrNull()
+        val maxPiece = info?.numPieces()?.minus(1)?.takeIf { it >= 0 } ?: Int.MAX_VALUE
+        val safeStart = start.coerceAtLeast(0L)
+        val first = (safeStart / pieceLength).toInt().coerceIn(0, maxPiece)
+        val last = ((endExclusive - 1) / pieceLength).toInt().coerceIn(first, maxPiece)
+        return first..last
+    }
+
+    private fun hasAllPieces(handle: TorrentHandle, pieces: IntRange): Boolean {
+        for (piece in pieces) {
+            if (!havePiece(handle, piece)) return false
+        }
+        return true
     }
 
     /**
@@ -320,10 +350,9 @@ class LibtorrentEngine {
     fun resume(handle: TorrentHandle) = runCatching { handle.resume() }
 
     fun setSeeding(handle: TorrentHandle, enabled: Boolean) {
-        runCatching {
-            if (enabled) handle.setFlags(TorrentFlags.SEED_MODE)
-            else handle.setFlags(TorrentFlags.UPLOAD_MODE, TorrentFlags.SEED_MODE)
-        }
+        val isDone = finished || status(handle)?.isFinished() == true
+        if (!isDone) return
+        if (enabled) resume(handle) else pause(handle)
     }
 
     fun setDownloadLimit(kilobytesPerSecond: Int) {

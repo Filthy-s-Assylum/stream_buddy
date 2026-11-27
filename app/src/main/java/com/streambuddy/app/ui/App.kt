@@ -1,8 +1,6 @@
 package com.streambuddy.app
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,15 +10,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -40,22 +35,18 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.streambuddy.app.AppContainer
 import com.streambuddy.app.cache.PlaybackCache
-import com.streambuddy.app.core.Fmt
 import com.streambuddy.app.data.AppSettings
 import com.streambuddy.app.data.LibraryItem
 import com.streambuddy.app.data.LibraryStatus
 import com.streambuddy.app.data.MediaType
 import com.streambuddy.app.download.Downloads
-import com.streambuddy.app.playback.PlayerUiState
 import com.streambuddy.app.torrent.Magnet
 import com.streambuddy.app.ui.AddTitleScreen
 import com.streambuddy.app.ui.BrowserScreen
@@ -74,7 +65,7 @@ import kotlinx.coroutines.withContext
 /** A magnet, link or local video that arrived through an Android intent. */
 data class SharedSource(val uri: String, val label: String?)
 
-private enum class Tab { LIBRARY, BROWSER, STORAGE, SETTINGS }
+enum class AppTab { LIBRARY, BROWSER, STORAGE, SETTINGS }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,6 +73,8 @@ fun StreamBuddyRoot(
     container: AppContainer,
     sharedSource: SharedSource?,
     onSharedSourceHandled: () -> Unit,
+    requestedTab: AppTab? = null,
+    onRequestedTabHandled: () -> Unit = {},
 ) {
     StreamBuddyTheme {
         val context = LocalContext.current
@@ -96,7 +89,7 @@ fun StreamBuddyRoot(
         val vpn by container.vpnMonitor.status.collectAsStateWithLifecycle()
         val security by container.securityCenter.state.collectAsStateWithLifecycle()
 
-        var tab by remember { mutableStateOf(Tab.LIBRARY) }
+        var tab by remember { mutableStateOf(AppTab.LIBRARY) }
         var detailId by remember { mutableStateOf<Long?>(null) }
         var addOpen by remember { mutableStateOf(false) }
         var playerOpen by remember { mutableStateOf(false) }
@@ -104,13 +97,26 @@ fun StreamBuddyRoot(
         var torrentStorageBytes by remember { mutableLongStateOf(0L) }
         var cacheUsedBytes by remember { mutableLongStateOf(0L) }
 
-        LaunchedEffect(torrent.phase, tab) {
+        val cacheMaxBytes = settings.playbackCacheMb.toLong() * 1024L * 1024L
+        val playerActive = playerState.playing || playerState.buffering || playerState.preparing
+
+        LaunchedEffect(requestedTab) {
+            if (requestedTab != null) {
+                tab = requestedTab
+                playerOpen = false
+                addOpen = false
+                detailId = null
+                onRequestedTabHandled()
+            }
+        }
+
+        LaunchedEffect(torrent.phase, tab, cacheMaxBytes) {
             while (true) {
                 torrentStorageBytes = withContext(Dispatchers.IO) {
                     container.torrentManager.storageUsedBytes()
                 }
                 cacheUsedBytes = withContext(Dispatchers.IO) {
-                    runCatching { PlaybackCache.usage(context).bytes }.getOrDefault(0L)
+                    runCatching { PlaybackCache.usage(context, cacheMaxBytes).bytes }.getOrDefault(0L)
                 }
                 delay(3_000)
             }
@@ -156,7 +162,7 @@ fun StreamBuddyRoot(
                         onSeedingChange = { enabled ->
                             container.torrentManager.setSeeding(enabled)
                         },
-                        onOpenSettings = { playerOpen = false; tab = Tab.SETTINGS },
+                        onOpenSettings = { playerOpen = false; tab = AppTab.SETTINGS },
                     )
                 }
 
@@ -171,7 +177,7 @@ fun StreamBuddyRoot(
                         onBack = { addOpen = false },
                         onOpenSettings = {
                             addOpen = false
-                            tab = Tab.SETTINGS
+                            tab = AppTab.SETTINGS
                         },
                     )
                 }
@@ -223,15 +229,13 @@ fun StreamBuddyRoot(
                         },
                         onDownload = { item ->
                             val source = item.sourceUri
-                            if (!source.isNullOrBlank()) {
+                            if (!source.isNullOrBlank() && Downloads.isHttpUri(source)) {
                                 scope.launch(Dispatchers.IO) {
                                     runCatching {
                                         Downloads.enqueue(
                                             context = context,
                                             uri = source,
-                                            mimeType = Downloads.mimeFor(
-                                                source.substringBefore('?').substringAfterLast('.', "mp4"),
-                                            ),
+                                            mimeType = Downloads.mimeForUri(source),
                                         )
                                     }
                                 }
@@ -240,7 +244,7 @@ fun StreamBuddyRoot(
                         onOpenPlayer = { playerOpen = true },
                         onWatchInBrowser = { link ->
                             browserUrl = link
-                            tab = Tab.BROWSER
+                            tab = AppTab.BROWSER
                         },
                     )
                 }
@@ -252,7 +256,7 @@ fun StreamBuddyRoot(
                     ) { padding ->
                         Box(Modifier.fillMaxSize().padding(padding)) {
                             when (tab) {
-                                Tab.LIBRARY -> LibraryScreen(
+                                AppTab.LIBRARY -> LibraryScreen(
                                     items = items,
                                     onOpen = { detailId = it.id },
                                     onPlay = { openPlayer(it, null) },
@@ -264,16 +268,18 @@ fun StreamBuddyRoot(
                                     },
                                 )
 
-                                Tab.STORAGE -> DownloadsScreen(
+                                AppTab.STORAGE -> DownloadsScreen(
                                     torrent = torrent,
                                     torrentStorageBytes = torrentStorageBytes,
+                                    cacheMaxBytes = cacheMaxBytes,
+                                    playerActive = playerActive,
                                     onClearTorrentStorage = {
                                         container.torrentManager.clearTorrentStorage()
                                     },
-                                    onOpenSettings = { tab = Tab.SETTINGS },
+                                    onOpenSettings = { tab = AppTab.SETTINGS },
                                 )
 
-                                Tab.BROWSER -> BrowserScreen(
+                                AppTab.BROWSER -> BrowserScreen(
                                     security = container.securityCenter,
                                     vpnBlocked = settings.requireVpnForNetwork && !vpn.active,
                                     initialUrl = browserUrl,
@@ -288,7 +294,7 @@ fun StreamBuddyRoot(
                                                 mediaType = mediaType,
                                             )
                                             detailId = id
-                                            tab = Tab.LIBRARY
+                                            tab = AppTab.LIBRARY
                                         }
                                     },
                                     onAddTorrent = { title, file ->
@@ -306,7 +312,7 @@ fun StreamBuddyRoot(
                                                 )
                                                 runCatching { file.delete() }
                                                 detailId = id
-                                                tab = Tab.LIBRARY
+                                                tab = AppTab.LIBRARY
                                             }
                                         }
                                     },
@@ -320,30 +326,48 @@ fun StreamBuddyRoot(
                                                 mediaType = MediaType.MOVIE,
                                             )
                                             detailId = id
-                                            tab = Tab.LIBRARY
+                                            tab = AppTab.LIBRARY
                                         }
                                     },
-                                    onOpenSettings = { tab = Tab.SETTINGS },
+                                    onOpenSettings = { tab = AppTab.SETTINGS },
                                 )
 
-                                Tab.SETTINGS -> SettingsScreen(
+                                AppTab.SETTINGS -> SettingsScreen(
                                     settings = settings,
                                     optimizer = optimizer,
+                                    security = security,
                                     cacheUsedBytes = cacheUsedBytes,
                                     torrentStorageBytes = torrentStorageBytes,
+                                    playerActive = playerActive,
                                     vpnActive = vpn.active,
                                     vpnSummary = vpn.summary,
                                     onChange = { updated -> applySettings(context, container, updated) },
-                                    onBack = { tab = Tab.LIBRARY },
+                                    onBack = { tab = AppTab.LIBRARY },
                                     onClearCache = {
-                                        if (!container.playerEngine.player.isPlaying) {
-                                            scope.launch(Dispatchers.IO) {
-                                                runCatching { PlaybackCache.clear(context) }
+                                        if (!playerActive) {
+                                            scope.launch {
+                                                cacheUsedBytes = withContext(Dispatchers.IO) {
+                                                    runCatching {
+                                                        PlaybackCache.clear(context)
+                                                        PlaybackCache.usage(context, cacheMaxBytes).bytes
+                                                    }.getOrDefault(0L)
+                                                }
                                             }
                                         }
                                     },
                                     onResetModel = { container.optimizerRuntime.resetModel() },
                                     onRefreshVpn = { container.vpnMonitor.refresh() },
+                                    onScanNow = {
+                                        val activeDir = container.torrentManager.activeDirectory()
+                                        container.securityCenter.scanNow(
+                                            skip = activeDir?.let(::setOf) ?: emptySet(),
+                                        )
+                                    },
+                                    onClearQuarantine = {
+                                        scope.launch(Dispatchers.IO) {
+                                            container.securityCenter.deleteQuarantined()
+                                        }
+                                    },
                                 )
                             }
                         }
@@ -371,7 +395,7 @@ fun StreamBuddyRoot(
                         onSharedSourceHandled()
                         addOpen = false
                         playerOpen = false
-                        tab = Tab.LIBRARY
+                        tab = AppTab.LIBRARY
                         detailId = id
                     }
                 },
@@ -381,29 +405,29 @@ fun StreamBuddyRoot(
 }
 
 @Composable
-private fun BottomTabs(selected: Tab, onSelect: (Tab) -> Unit) {
+private fun BottomTabs(selected: AppTab, onSelect: (AppTab) -> Unit) {
     NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
         NavigationBarItem(
-            selected = selected == Tab.LIBRARY,
-            onClick = { onSelect(Tab.LIBRARY) },
+            selected = selected == AppTab.LIBRARY,
+            onClick = { onSelect(AppTab.LIBRARY) },
             icon = { Icon(Icons.Filled.Home, contentDescription = null) },
             label = { Text("Library") },
         )
         NavigationBarItem(
-            selected = selected == Tab.BROWSER,
-            onClick = { onSelect(Tab.BROWSER) },
+            selected = selected == AppTab.BROWSER,
+            onClick = { onSelect(AppTab.BROWSER) },
             icon = { Icon(Icons.Filled.Search, contentDescription = null) },
             label = { Text("Browser") },
         )
         NavigationBarItem(
-            selected = selected == Tab.STORAGE,
-            onClick = { onSelect(Tab.STORAGE) },
+            selected = selected == AppTab.STORAGE,
+            onClick = { onSelect(AppTab.STORAGE) },
             icon = { Icon(Icons.Filled.List, contentDescription = null) },
             label = { Text("Storage") },
         )
         NavigationBarItem(
-            selected = selected == Tab.SETTINGS,
-            onClick = { onSelect(Tab.SETTINGS) },
+            selected = selected == AppTab.SETTINGS,
+            onClick = { onSelect(AppTab.SETTINGS) },
             icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
             label = { Text("Settings") },
         )

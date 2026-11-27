@@ -149,8 +149,8 @@ object PlaybackCache {
         get(context, currentMaxBytes)
     }
 
-    fun usage(context: Context): CacheUsage {
-        val active = get(context)
+    fun usage(context: Context, maxBytes: Long = currentMaxBytes): CacheUsage {
+        val active = get(context, maxBytes)
         var bytes = 0L
         var resources = 0
         for (key in active.keys) {

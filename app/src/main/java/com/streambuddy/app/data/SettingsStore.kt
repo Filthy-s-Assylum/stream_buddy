@@ -35,20 +35,24 @@ data class AppSettings(
 ) {
     val prefetchMillis: Long get() = prefetchMinutes * 60_000L
 
-    fun sanitized(): AppSettings = copy(
-        prefetchMinutes = prefetchMinutes.coerceIn(MIN_PREFETCH_MINUTES, MAX_PREFETCH_MINUTES),
-        playbackCacheMb = playbackCacheMb.coerceIn(128, 16 * 1024),
-        startBufferSeconds = startBufferSeconds.coerceIn(2, 30),
-        bufferTargetSeconds = bufferTargetSeconds.coerceIn(10, 180),
-        prefetchSeconds = prefetchSeconds.coerceIn(15, 600),
-        maxVideoBitrateKbps = maxVideoBitrateKbps.coerceIn(0, 100_000),
-        torrentDownloadLimitKbps = torrentDownloadLimitKbps.coerceIn(0, 1_000_000),
-        torrentUploadLimitKbps = torrentUploadLimitKbps.coerceIn(8, 1_000_000),
-        torrentStorageLimitMb = torrentStorageLimitMb.coerceIn(256, 512 * 1024),
-        metadataTimeoutSeconds = metadataTimeoutSeconds.coerceIn(10, 180),
-        motnApiKey = motnApiKey.take(200),
-        motnCountry = motnCountry.trim().lowercase().filter { it.isLetter() }.take(2).ifBlank { "us" },
-    )
+    fun sanitized(): AppSettings {
+        val clampedStart = startBufferSeconds.coerceIn(2, 30)
+        return copy(
+            prefetchMinutes = prefetchMinutes.coerceIn(MIN_PREFETCH_MINUTES, MAX_PREFETCH_MINUTES),
+            playbackCacheMb = playbackCacheMb.coerceIn(128, 16 * 1024),
+            startBufferSeconds = clampedStart,
+            bufferTargetSeconds = bufferTargetSeconds.coerceIn(maxOf(10, clampedStart), 180),
+            prefetchSeconds = prefetchSeconds.coerceIn(15, 600),
+            maxVideoBitrateKbps = maxVideoBitrateKbps.coerceIn(0, 100_000),
+            torrentDownloadLimitKbps = torrentDownloadLimitKbps.coerceIn(0, 1_000_000),
+            torrentUploadLimitKbps = torrentUploadLimitKbps.coerceIn(8, 1_000_000),
+            torrentStorageLimitMb = torrentStorageLimitMb.coerceIn(256, 512 * 1024),
+            metadataTimeoutSeconds = metadataTimeoutSeconds.coerceIn(10, 180),
+            tmdbApiKey = tmdbApiKey.trim().take(200),
+            motnApiKey = motnApiKey.trim().take(200),
+            motnCountry = motnCountry.trim().lowercase().filter { it.isLetter() }.take(2).ifBlank { "us" },
+        )
+    }
 
     internal fun encode(): String {
         val values = linkedMapOf(
@@ -137,13 +141,14 @@ class SettingsStore private constructor(context: Context) {
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
 
     private fun load(): AppSettings {
-        val raw = prefs.getString(KEY) ?: return AppSettings(
-            tmdbApiKey = com.streambuddy.app.BuildConfig.TMDB_API_KEY.take(200),
-        )
-        return runCatching { AppSettings.decode(raw) }.getOrElse {
-            AppSettings(tmdbApiKey = com.streambuddy.app.BuildConfig.TMDB_API_KEY.take(200))
-        }
+        val raw = prefs.getString(KEY) ?: return defaultSettings()
+        return runCatching { AppSettings.decode(raw) }.getOrElse { defaultSettings() }
     }
+
+    private fun defaultSettings(): AppSettings = AppSettings(
+        tmdbApiKey = com.streambuddy.app.BuildConfig.TMDB_API_KEY.take(200),
+        motnApiKey = com.streambuddy.app.BuildConfig.MOTN_API_KEY.take(200),
+    ).sanitized()
 
     fun current(): AppSettings = _settings.value
 
@@ -176,9 +181,7 @@ class SettingsStore private constructor(context: Context) {
 
     fun clear() {
         prefs.remove(KEY)
-        _settings.value = AppSettings(
-            tmdbApiKey = com.streambuddy.app.BuildConfig.TMDB_API_KEY.take(200),
-        )
+        _settings.value = defaultSettings()
     }
 
     companion object {
@@ -191,6 +194,4 @@ class SettingsStore private constructor(context: Context) {
             instance ?: SettingsStore(context.applicationContext).also { instance = it }
         }
     }
-
-    private data class UpdateResult(val settings: AppSettings, val persisted: Boolean)
 }

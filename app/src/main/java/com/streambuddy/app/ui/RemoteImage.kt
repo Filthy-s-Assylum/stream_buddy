@@ -23,6 +23,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
@@ -92,8 +93,19 @@ object PosterLoader {
             if (!type.startsWith("image/")) return null
             val body = response.body ?: return null
             if (body.contentLength() > MAX_IMAGE_BYTES) return null
-            val bytes = body.bytes()
-            if (bytes.size > MAX_IMAGE_BYTES) null else bytes
+            body.byteStream().use { input ->
+                val buffer = ByteArray(16 * 1024)
+                val out = ByteArrayOutputStream()
+                var total = 0
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read <= 0) break
+                    total += read
+                    if (total > MAX_IMAGE_BYTES) return null
+                    out.write(buffer, 0, read)
+                }
+                out.toByteArray()
+            }
         }
     }.getOrNull()
 

@@ -32,6 +32,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,9 +46,11 @@ import com.streambuddy.app.cache.CacheUsage
 import com.streambuddy.app.cache.PlaybackCache
 import com.streambuddy.app.core.Fmt
 import com.streambuddy.app.download.Downloads
-import com.streambuddy.app.torrent.TorrentPhase
 import com.streambuddy.app.torrent.TorrentUiState
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Storage screen. It separates the three different kinds of bytes Stream Buddy
@@ -63,20 +66,26 @@ import kotlinx.coroutines.delay
 fun DownloadsScreen(
     torrent: TorrentUiState,
     torrentStorageBytes: Long,
+    cacheMaxBytes: Long,
+    playerActive: Boolean,
     onClearTorrentStorage: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var downloads by remember { mutableStateOf<List<Download>>(emptyList()) }
-    var cacheUsage by remember { mutableStateOf(CacheUsage(0, 0, 0)) }
+    var cacheUsage by remember { mutableStateOf(CacheUsage(0, 0, cacheMaxBytes)) }
     var confirmCache by remember { mutableStateOf(false) }
     var confirmTorrent by remember { mutableStateOf(false) }
     var refreshTick by remember { mutableStateOf(0) }
 
-    LaunchedEffect(refreshTick, torrent.phase) {
+    LaunchedEffect(refreshTick, torrent.phase, cacheMaxBytes) {
         while (true) {
-            downloads = Downloads.snapshot(context)
-            cacheUsage = PlaybackCache.usage(context)
+            val (snap, usage) = withContext(Dispatchers.IO) {
+                Downloads.snapshot(context) to PlaybackCache.usage(context, cacheMaxBytes)
+            }
+            downloads = snap
+            cacheUsage = usage
             delay(2_000)
         }
     }
@@ -121,7 +130,10 @@ fun DownloadsScreen(
                         )
                         Spacer(Modifier.height(10.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { confirmCache = true }) { Text("Clear playback cache") }
+                            Button(
+                                onClick = { confirmCache = true },
+                                enabled = !playerActive && cacheUsage.bytes > 0,
+                            ) { Text("Clear playback cache") }
                             TextButton(onClick = onOpenSettings) { Text("Change limit") }
                         }
                     }
@@ -203,9 +215,13 @@ fun DownloadsScreen(
             text = { Text("Cached media segments are deleted. Playback continues online and rebuilds the cache.") },
             confirmButton = {
                 TextButton(onClick = {
-                    PlaybackCache.clear(context)
-                    refreshTick++
                     confirmCache = false
+                    scope.launch {
+                        withContext(Dispatchers.IO) {
+                            runCatching { PlaybackCache.clear(context) }
+                        }
+                        refreshTick++
+                    }
                 }) { Text("Clear") }
             },
             dismissButton = { TextButton(onClick = { confirmCache = false }) { Text("Cancel") } },

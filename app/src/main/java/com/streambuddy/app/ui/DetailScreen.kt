@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -44,7 +43,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -54,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import com.streambuddy.app.core.Fmt
 import com.streambuddy.app.data.LibraryItem
 import com.streambuddy.app.data.LibraryStatus
+import com.streambuddy.app.download.Downloads
 import com.streambuddy.app.metadata.MotnRepository
 import com.streambuddy.app.metadata.TmdbImages
 import com.streambuddy.app.metadata.WatchOption
@@ -369,8 +368,11 @@ fun DetailScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilledTonalButton(onClick = { attachOpen = true }) { Text("Change source") }
                         TextButton(onClick = { onClearSource(item) }) { Text("Remove source") }
-                        if (!Magnet.isMagnet(item.sourceUri.orEmpty())) {
-                            TextButton(onClick = { onDownload(item) }) { Text("Download first") }
+                        if (Downloads.isHttpUri(item.sourceUri.orEmpty())) {
+                            TextButton(
+                                onClick = { onDownload(item) },
+                                enabled = !vpnBlocked,
+                            ) { Text("Download first") }
                         }
                     }
                 } else {
@@ -501,26 +503,19 @@ fun DetailScreen(
 
 /** Returns a friendly validation error, or null when the source is acceptable. */
 fun validateSource(value: String): String? {
-    if (value.isBlank()) return "Paste a magnet link or a media URL"
-    if (Magnet.isMagnet(value)) {
-        return Magnet.parse(value).exceptionOrNull()?.let {
+    val trimmed = value.trim()
+    if (trimmed.isBlank()) return "Paste a magnet link or a media URL"
+    if (Magnet.isMagnet(trimmed)) {
+        return Magnet.parse(trimmed).exceptionOrNull()?.let {
             "That magnet is not valid. It needs a 40-character btih info hash."
         }
     }
-    val uri = runCatching { java.net.URI(value) }.getOrNull()
+    val uri = runCatching { java.net.URI(trimmed) }.getOrNull()
         ?: return "That does not look like a URL"
     val scheme = uri.scheme?.lowercase()
-    if (scheme != "https" && scheme != "http") {
-        return "Only magnet links, http(s) media links and local files are supported"
-    }
-    if (uri.host.isNullOrBlank()) return "The link has no host"
-    // Accept these file-hosting and video platforms:
-    val host = uri.host.lowercase()
-    val isPirateBay = host.contains(".piratebay")
-    val isRarbg = host.contains("rarbg")
-    return when {
-        host == "streamtape.com" || host == "dood.co" || host == "dood.to" || host == "uptobox.com" || host == "uptobox.net" -> null
-        isPirateBay || host == "1337x" || isRarbg || host == "yts" || host == "eztv" -> null
-        else -> null
+    return when (scheme) {
+        "https", "http" -> if (uri.host.isNullOrBlank()) "The link has no host" else null
+        "content", "file" -> if (uri.schemeSpecificPart.isNullOrBlank()) "The file URI is empty" else null
+        else -> "Only magnet links, http(s) media links and local files are supported"
     }
 }

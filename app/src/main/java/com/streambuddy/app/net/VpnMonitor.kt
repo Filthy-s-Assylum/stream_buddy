@@ -72,7 +72,19 @@ class VpnMonitor(context: Context) {
         ) = refresh()
     }
 
+    private val defaultCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) = refresh()
+
+        override fun onLost(network: Network) = refresh()
+
+        override fun onCapabilitiesChanged(
+            network: Network,
+            networkCapabilities: NetworkCapabilities,
+        ) = refresh()
+    }
+
     private var registered = false
+    private var defaultRegistered = false
 
     init {
         register()
@@ -92,23 +104,35 @@ class VpnMonitor(context: Context) {
     @Synchronized
     fun register() {
         val manager = connectivity ?: return
-        if (registered) return
-        val request = NetworkRequest.Builder()
-            .addTransportType(NetworkCapabilities.TRANSPORT_VPN)
-            .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-            .build()
-        runCatching {
-            manager.registerNetworkCallback(request, callback)
-            registered = true
+        if (!registered) {
+            val request = NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_VPN)
+                .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                .build()
+            runCatching {
+                manager.registerNetworkCallback(request, callback)
+                registered = true
+            }
+        }
+        if (!defaultRegistered) {
+            runCatching {
+                manager.registerDefaultNetworkCallback(defaultCallback)
+                defaultRegistered = true
+            }
         }
     }
 
     @Synchronized
     fun release() {
         val manager = connectivity ?: return
-        if (!registered) return
-        runCatching { manager.unregisterNetworkCallback(callback) }
-        registered = false
+        if (registered) {
+            runCatching { manager.unregisterNetworkCallback(callback) }
+            registered = false
+        }
+        if (defaultRegistered) {
+            runCatching { manager.unregisterNetworkCallback(defaultCallback) }
+            defaultRegistered = false
+        }
     }
 
     private fun readStatus(): VpnStatus {
@@ -123,12 +147,13 @@ class VpnMonitor(context: Context) {
             runCatching { manager.getNetworkCapabilities(network) }.getOrNull()
         }
 
-        val activeViaVpn = caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true &&
+        if (caps != null &&
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
             !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-        if (activeViaVpn) {
+        ) {
             return VpnStatus(
                 active = true,
-                metered = !caps!!.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED),
+                metered = !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED),
                 checkedAt = System.currentTimeMillis(),
                 reason = "VPN route detected",
             )

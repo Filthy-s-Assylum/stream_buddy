@@ -87,4 +87,13 @@ class MagnetTest {
         assertEquals(hexHash, link.infoHashHex)
         assertNull(link.displayName)
     }
+
+    @Test
+    fun `preserves literal plus signs and malformed percent sequences safely`() {
+        val withPlus = Magnet.parse("magnet:?xt=urn:btih:$hexHash&dn=Show+2024").getOrThrow()
+        assertEquals("Show+2024", withPlus.displayName)
+
+        val badPercent = Magnet.parse("magnet:?xt=urn:btih:$hexHash&dn=100%pure").getOrThrow()
+        assertEquals("100%pure", badPercent.displayName)
+    }
 }
