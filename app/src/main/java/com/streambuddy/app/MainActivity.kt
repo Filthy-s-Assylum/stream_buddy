@@ -25,6 +25,7 @@ class MainActivity : ComponentActivity() {
 
     private var pendingShared by mutableStateOf<SharedSource?>(null)
     private var pendingTab by mutableStateOf<AppTab?>(null)
+    private var pendingShowLatest by mutableStateOf(false)
     private var pendingOpenPlayer by mutableStateOf(false)
 
     private val notificationPermission = registerForActivityResult(
@@ -53,6 +54,8 @@ class MainActivity : ComponentActivity() {
                 onSharedSourceHandled = { pendingShared = null },
                 requestedTab = pendingTab,
                 onRequestedTabHandled = { pendingTab = null },
+                requestedShowLatest = pendingShowLatest,
+                onRequestedShowLatestHandled = { pendingShowLatest = false },
                 requestedOpenPlayer = pendingOpenPlayer,
                 onRequestedOpenPlayerHandled = { pendingOpenPlayer = false },
             )
@@ -82,9 +85,18 @@ class MainActivity : ComponentActivity() {
                 pendingShared = null
                 return
             }
+            if (data.host.equals("discover", ignoreCase = true) ||
+                data.host.equals("latest", ignoreCase = true)
+            ) {
+                pendingTab = AppTab.LIBRARY
+                pendingShowLatest = true
+                pendingShared = null
+                return
+            }
             val shortcutTab = extractShortcutTab(intent)
             if (shortcutTab != null) {
                 pendingTab = shortcutTab
+                if (shortcutTab == AppTab.LIBRARY) pendingShowLatest = false
                 pendingShared = null
                 return
             }

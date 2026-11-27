@@ -53,13 +53,17 @@ import com.streambuddy.app.data.AppSettings
 import com.streambuddy.app.data.LibraryItem
 import com.streambuddy.app.data.LibraryStatus
 import com.streambuddy.app.data.MediaType
+import com.streambuddy.app.data.MetadataCandidate
 import com.streambuddy.app.data.PredictorRepository
 import com.streambuddy.app.download.Downloads
+import com.streambuddy.app.metadata.TorrentRelease
 import com.streambuddy.app.torrent.Magnet
 import com.streambuddy.app.ui.AddTitleScreen
 import com.streambuddy.app.ui.AppsScreen
 import com.streambuddy.app.ui.BrowserScreen
+import com.streambuddy.app.ui.CatalogDetailScreen
 import com.streambuddy.app.ui.DetailScreen
+import com.streambuddy.app.ui.DiscoverScreen
 import com.streambuddy.app.ui.DownloadsScreen
 import com.streambuddy.app.ui.LibraryScreen
 import com.streambuddy.app.ui.PlayerScreen
@@ -88,6 +92,8 @@ fun StreamBuddyRoot(
     onSharedSourceHandled: () -> Unit,
     requestedTab: AppTab? = null,
     onRequestedTabHandled: () -> Unit = {},
+    requestedShowLatest: Boolean = false,
+    onRequestedShowLatestHandled: () -> Unit = {},
     requestedOpenPlayer: Boolean = false,
     onRequestedOpenPlayerHandled: () -> Unit = {},
 ) {
@@ -103,12 +109,15 @@ fun StreamBuddyRoot(
         val optimizer by container.optimizerRuntime.state.collectAsStateWithLifecycle()
         val predictorStatus by PredictorRepository.get(context).state.collectAsStateWithLifecycle()
         val torrent by container.torrentManager.state.collectAsStateWithLifecycle()
+        val torrentDownload by container.torrentDownloadManager.state.collectAsStateWithLifecycle()
         val vpn by container.vpnMonitor.status.collectAsStateWithLifecycle()
         val security by container.securityCenter.state.collectAsStateWithLifecycle()
         val preCacheStates by container.libraryPreCacher.states.collectAsStateWithLifecycle()
         val predictions by container.libraryPreCacher.predictions.collectAsStateWithLifecycle()
 
         var tab by remember { mutableStateOf(AppTab.LIBRARY) }
+        var showLatestCatalog by remember { mutableStateOf(false) }
+        var catalogItem by remember { mutableStateOf<MetadataCandidate?>(null) }
         var detailId by remember { mutableStateOf<Long?>(null) }
         var addOpen by remember { mutableStateOf(false) }
         var playerOpen by remember { mutableStateOf(false) }
@@ -120,13 +129,26 @@ fun StreamBuddyRoot(
         val playerActive = playerState.playing || playerState.buffering || playerState.preparing
         val vpnBlocked = settings.requireVpnForNetwork && !vpn.active
 
-        LaunchedEffect(requestedTab) {
+        LaunchedEffect(requestedTab, requestedShowLatest) {
             if (requestedTab != null) {
                 tab = requestedTab
+                if (requestedTab == AppTab.LIBRARY) {
+                    showLatestCatalog = requestedShowLatest
+                }
                 playerOpen = false
                 addOpen = false
+                catalogItem = null
                 detailId = null
                 onRequestedTabHandled()
+                if (requestedShowLatest) onRequestedShowLatestHandled()
+            } else if (requestedShowLatest) {
+                tab = AppTab.LIBRARY
+                showLatestCatalog = true
+                playerOpen = false
+                addOpen = false
+                catalogItem = null
+                detailId = null
+                onRequestedShowLatestHandled()
             }
         }
 
@@ -161,9 +183,87 @@ fun StreamBuddyRoot(
             playerOpen = true
         }
 
+        suspend fun ensureLibraryId(item: MetadataCandidate): Long =
+            container.libraryRepository.findByTmdb(item.tmdbId, item.mediaType)?.id
+                ?: container.libraryRepository.add(item)
+
+        fun watchCatalog(item: MetadataCandidate, release: TorrentRelease) {
+            scope.launch {
+                val id = ensureLibraryId(item)
+                val infoHash = runCatching {
+                    Magnet.parse(release.magnet).getOrThrow().infoHashHex
+                }.getOrNull()
+                container.libraryRepository.attachSource(
+                    id = id,
+                    sourceUri = release.magnet,
+                    label = "${release.provider} · ${release.detailLabel}",
+                    infoHash = infoHash,
+                )
+                val libraryItem = container.libraryRepository.find(id) ?: return@launch
+                catalogItem = null
+                openPlayer(libraryItem, null)
+            }
+        }
+
+        fun downloadCatalog(item: MetadataCandidate, release: TorrentRelease) {
+            scope.launch {
+                val id = ensureLibraryId(item)
+                val infoHash = runCatching {
+                    Magnet.parse(release.magnet).getOrThrow().infoHashHex
+                }.getOrNull()
+                container.libraryRepository.attachSource(
+                    id = id,
+                    sourceUri = release.magnet,
+                    label = "Download · ${release.provider} · ${release.detailLabel}",
+                    infoHash = infoHash,
+                )
+                container.torrentDownloadManager.start(
+                    itemKey = "${item.mediaType}-${item.tmdbId}",
+                    title = item.title,
+                    magnet = release.magnet,
+                )
+            }
+        }
+
+        fun playDownloaded(item: MetadataCandidate?, path: String) {
+            scope.launch {
+                val file = java.io.File(path)
+                val id = if (item != null) {
+                    ensureLibraryId(item).also {
+                        container.libraryRepository.attachSource(
+                            id = it,
+                            sourceUri = Uri.fromFile(file).toString(),
+                            label = "Downloaded · ${file.name}",
+                            infoHash = null,
+                        )
+                    }
+                } else {
+                    container.libraryRepository.addCustom(
+                        title = file.nameWithoutExtension.ifBlank { "Downloaded media" },
+                        sourceUri = Uri.fromFile(file).toString(),
+                        sourceLabel = "Downloaded · ${file.name}",
+                        infoHash = null,
+                        mediaType = MediaType.MOVIE,
+                    )
+                }
+                val libraryItem = container.libraryRepository.find(id) ?: return@launch
+                catalogItem = null
+                openPlayer(libraryItem, null)
+            }
+        }
+
         BackHandler(enabled = playerOpen) { playerOpen = false }
         BackHandler(enabled = !playerOpen && addOpen) { addOpen = false }
-        BackHandler(enabled = !playerOpen && !addOpen && detailId != null) { detailId = null }
+        BackHandler(enabled = !playerOpen && !addOpen && catalogItem != null) { catalogItem = null }
+        BackHandler(enabled = !playerOpen && !addOpen && catalogItem == null && detailId != null) {
+            detailId = null
+        }
+        BackHandler(
+            enabled = !playerOpen && !addOpen && catalogItem == null && detailId == null &&
+                tab == AppTab.LIBRARY && showLatestCatalog,
+        ) {
+            showLatestCatalog = false
+        }
 
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             when {
@@ -215,6 +315,36 @@ fun StreamBuddyRoot(
                             addOpen = false
                             tab = AppTab.SETTINGS
                         },
+                    )
+                }
+
+                catalogItem != null -> {
+                    val catalog = catalogItem!!
+                    CatalogDetailScreen(
+                        item = catalog,
+                        discover = container.discoverRepository,
+                        inLibrary = items.any {
+                            it.tmdbId == catalog.tmdbId && it.mediaType == catalog.mediaType
+                        },
+                        vpnBlocked = vpnBlocked,
+                        download = torrentDownload,
+                        onBack = { catalogItem = null },
+                        onWatchNow = { item, release -> watchCatalog(item, release) },
+                        onDownload = { item, release -> downloadCatalog(item, release) },
+                        onPlayDownload = { item, path -> playDownloaded(item, path) },
+                        onAddToLibrary = { item ->
+                            scope.launch {
+                                val id = ensureLibraryId(item)
+                                catalogItem = null
+                                detailId = id
+                            }
+                        },
+                        onOpenBrowser = { url ->
+                            catalogItem = null
+                            browserUrl = url
+                            tab = AppTab.BROWSER
+                        },
+                        onCancelDownload = { container.torrentDownloadManager.cancel() },
                     )
                 }
 
@@ -333,15 +463,26 @@ fun StreamBuddyRoot(
                     ) { padding ->
                         Box(Modifier.fillMaxSize().padding(padding)) {
                             when (tab) {
-                                AppTab.LIBRARY -> LibraryScreen(
-                                    items = items,
-                                    onOpen = { detailId = it.id },
-                                    onPlay = { openPlayer(it, null) },
-                                    onAdd = { addOpen = true },
-                                    vpnWarning = if (vpnBlocked) vpn.summary else null,
-                                    predictions = predictions,
-                                    preCacheStates = preCacheStates,
-                                )
+                                AppTab.LIBRARY -> if (showLatestCatalog) {
+                                    DiscoverScreen(
+                                        discover = container.discoverRepository,
+                                        vpnBlocked = vpnBlocked,
+                                        onOpen = { catalogItem = it },
+                                        onOpenSettings = { tab = AppTab.SETTINGS },
+                                        onShowLibrary = { showLatestCatalog = false },
+                                    )
+                                } else {
+                                    LibraryScreen(
+                                        items = items,
+                                        onOpen = { detailId = it.id },
+                                        onPlay = { openPlayer(it, null) },
+                                        onAdd = { addOpen = true },
+                                        vpnWarning = if (vpnBlocked) vpn.summary else null,
+                                        predictions = predictions,
+                                        preCacheStates = preCacheStates,
+                                        onShowLatest = { showLatestCatalog = true },
+                                    )
+                                }
 
                                 AppTab.BROWSER -> BrowserScreen(
                                     security = container.securityCenter,
@@ -428,6 +569,35 @@ fun StreamBuddyRoot(
                                         }
                                     },
                                     onOpenSettings = { tab = AppTab.SETTINGS },
+                                    torrentDownload = torrentDownload,
+                                    onCancelTorrentDownload = { container.torrentDownloadManager.cancel() },
+                                    onPlayTorrentDownload = { path ->
+                                        val parts = torrentDownload.itemKey.split('-', limit = 2)
+                                        val tmdbId = parts.getOrNull(1)?.toIntOrNull()
+                                        val mediaType = parts.getOrNull(0)?.let {
+                                            runCatching { MediaType.valueOf(it) }.getOrNull()
+                                        }
+                                        val existing = if (tmdbId != null && mediaType != null) {
+                                            items.firstOrNull { it.tmdbId == tmdbId && it.mediaType == mediaType }
+                                        } else {
+                                            null
+                                        }
+                                        if (existing != null) {
+                                            scope.launch {
+                                                val file = java.io.File(path)
+                                                container.libraryRepository.attachSource(
+                                                    id = existing.id,
+                                                    sourceUri = Uri.fromFile(file).toString(),
+                                                    label = "Downloaded · ${file.name}",
+                                                    infoHash = null,
+                                                )
+                                                container.libraryRepository.find(existing.id)
+                                                    ?.let { openPlayer(it, null) }
+                                            }
+                                        } else {
+                                            playDownloaded(null, path)
+                                        }
+                                    },
                                 )
 
                                 AppTab.SETTINGS -> SettingsScreen(
@@ -525,6 +695,8 @@ fun StreamBuddyRoot(
                         onSharedSourceHandled()
                         addOpen = false
                         playerOpen = false
+                        catalogItem = null
+                        showLatestCatalog = false
                         tab = AppTab.LIBRARY
                         detailId = id
                     }

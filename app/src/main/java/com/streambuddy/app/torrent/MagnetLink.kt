@@ -17,6 +17,8 @@ data class MagnetLink(
     /** `xl=` — exact total length in bytes, when the publisher included it. */
     val exactLengthBytes: Long?,
 ) {
+    val exactLength: Long? get() = exactLengthBytes
+
     /** Short, stable identifier used in URIs and as a cache key. */
     val shortHash: String get() = infoHashHex.take(8)
 

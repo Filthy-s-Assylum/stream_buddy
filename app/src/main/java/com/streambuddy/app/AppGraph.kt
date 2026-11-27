@@ -5,6 +5,7 @@ import com.streambuddy.app.cache.LibraryPreCacher
 import com.streambuddy.app.data.AppDb
 import com.streambuddy.app.data.LibraryRepository
 import com.streambuddy.app.data.SettingsStore
+import com.streambuddy.app.metadata.DiscoverRepository
 import com.streambuddy.app.metadata.MetadataRepository
 import com.streambuddy.app.metadata.MotnRepository
 import com.streambuddy.app.net.NetworkGuard
@@ -13,6 +14,7 @@ import com.streambuddy.app.net.VpnMonitor
 import com.streambuddy.app.optimizer.OptimizerRuntime
 import com.streambuddy.app.playback.PlayerEngine
 import com.streambuddy.app.security.SecurityCenter
+import com.streambuddy.app.torrent.TorrentDownloadManager
 import com.streambuddy.app.torrent.TorrentManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,12 +36,14 @@ class AppContainer(context: Context) {
     val db: AppDb = AppDb.get(appContext)
     val libraryRepository = LibraryRepository(db.library())
     val metadataRepository = MetadataRepository(settingsStore)
+    val discoverRepository = DiscoverRepository(metadataRepository)
     val motnRepository = MotnRepository(settingsStore)
     val vpnMonitor = VpnMonitor(appContext)
     val networkPolicy = NetworkPolicy(settingsStore, vpnMonitor).also { NetworkGuard.install(it) }
     val optimizerRuntime = OptimizerRuntime(appContext, settingsStore, db)
     val securityCenter = SecurityCenter(appContext, settingsStore)
     val torrentManager = TorrentManager(appContext, settingsStore, vpnMonitor, securityCenter)
+    val torrentDownloadManager = TorrentDownloadManager(appContext, settingsStore, vpnMonitor)
     val libraryPreCacher = LibraryPreCacher(appContext, settingsStore, libraryRepository)
     val playerEngine = PlayerEngine(
         context = appContext,
@@ -76,6 +80,7 @@ class AppContainer(context: Context) {
         runCatching { playerEngine.release() }
         runCatching { libraryPreCacher.release() }
         runCatching { torrentManager.release() }
+        runCatching { torrentDownloadManager.release() }
         runCatching { securityCenter.release() }
         runCatching { vpnMonitor.release() }
         runCatching { com.streambuddy.app.download.Downloads.release() }

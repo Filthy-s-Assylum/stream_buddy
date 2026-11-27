@@ -78,6 +78,14 @@ class SharedLinkTest {
             SharedLink.Target.Tab("library"),
             SharedLink.parse(actionView, "streambuddy://library", null),
         )
+        assertEquals(
+            SharedLink.Target.Tab("discover"),
+            SharedLink.parse(actionView, "streambuddy://discover", null),
+        )
+        assertEquals(
+            SharedLink.Target.Tab("latest"),
+            SharedLink.parse(actionView, "streambuddy://latest", null),
+        )
     }
 
     @Test
