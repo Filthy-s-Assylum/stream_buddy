@@ -573,7 +573,7 @@ fun StreamBuddyRoot(
                                     onCancelTorrentDownload = { container.torrentDownloadManager.cancel() },
                                     onPlayTorrentDownload = { path ->
                                         val parts = torrentDownload.itemKey.split('-', limit = 2)
-                                        val tmdbId = parts.getOrNull(1)?.toLongOrNull()
+                                        val tmdbId = parts.getOrNull(1)?.toIntOrNull()
                                         val mediaType = parts.getOrNull(0)?.let {
                                             runCatching { MediaType.valueOf(it) }.getOrNull()
                                         }
