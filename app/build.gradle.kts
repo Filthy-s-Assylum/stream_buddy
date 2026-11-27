@@ -167,8 +167,11 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            buildConfigField("String", "TMDB_API_KEY", buildConfigString(""))
-            buildConfigField("String", "MOTN_API_KEY", buildConfigString(""))
+            // The user's keys are baked in at build time from .env or CI
+            // secrets, so a sideloaded release build can show the TMDB
+            // catalogue without the user typing a key again.
+            buildConfigField("String", "TMDB_API_KEY", buildConfigString(buildTimeTmdbKey))
+            buildConfigField("String", "MOTN_API_KEY", buildConfigString(buildTimeMotnKey))
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

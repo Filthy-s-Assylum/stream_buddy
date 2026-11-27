@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -54,12 +55,16 @@ import com.streambuddy.app.data.AppSettings
 import com.streambuddy.app.data.LibraryItem
 import com.streambuddy.app.data.LibraryStatus
 import com.streambuddy.app.data.MediaType
+import com.streambuddy.app.data.MetadataCandidate
 import com.streambuddy.app.download.Downloads
+import com.streambuddy.app.metadata.TorrentRelease
 import com.streambuddy.app.playback.PlayerUiState
 import com.streambuddy.app.torrent.Magnet
 import com.streambuddy.app.ui.AddTitleScreen
 import com.streambuddy.app.ui.BrowserScreen
+import com.streambuddy.app.ui.CatalogDetailScreen
 import com.streambuddy.app.ui.DetailScreen
+import com.streambuddy.app.ui.DiscoverScreen
 import com.streambuddy.app.ui.DownloadsScreen
 import com.streambuddy.app.ui.LibraryScreen
 import com.streambuddy.app.ui.PlayerScreen
@@ -74,7 +79,7 @@ import kotlinx.coroutines.withContext
 /** A magnet, link or local video that arrived through an Android intent. */
 data class SharedSource(val uri: String, val label: String?)
 
-private enum class Tab { LIBRARY, BROWSER, STORAGE, SETTINGS }
+private enum class Tab { LIBRARY, DISCOVER, BROWSER, STORAGE, SETTINGS }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -103,6 +108,8 @@ fun StreamBuddyRoot(
         var browserUrl by remember { mutableStateOf<String?>(null) }
         var torrentStorageBytes by remember { mutableLongStateOf(0L) }
         var cacheUsedBytes by remember { mutableLongStateOf(0L) }
+        var catalogItem by remember { mutableStateOf<MetadataCandidate?>(null) }
+        val downloadState by container.torrentDownloadManager.state.collectAsStateWithLifecycle()
 
         LaunchedEffect(torrent.phase, tab) {
             while (true) {
@@ -126,9 +133,68 @@ fun StreamBuddyRoot(
             playerOpen = true
         }
 
+        suspend fun ensureLibraryId(item: MetadataCandidate): Long =
+            container.libraryRepository.findByTmdb(item.tmdbId, item.mediaType)?.id
+                ?: container.libraryRepository.add(item)
+
+        fun watchCatalog(item: MetadataCandidate, release: TorrentRelease) {
+            scope.launch {
+                val id = ensureLibraryId(item)
+                val infoHash = runCatching {
+                    Magnet.parse(release.magnet).getOrThrow().infoHashHex
+                }.getOrNull()
+                container.libraryRepository.attachSource(
+                    id = id,
+                    sourceUri = release.magnet,
+                    label = "${release.provider} · ${release.detailLabel}",
+                    infoHash = infoHash,
+                )
+                val libraryItem = container.libraryRepository.find(id) ?: return@launch
+                catalogItem = null
+                container.playerEngine.play(libraryItem, null)
+                playerOpen = true
+            }
+        }
+
+        fun downloadCatalog(item: MetadataCandidate, release: TorrentRelease) {
+            scope.launch {
+                val id = ensureLibraryId(item)
+                val infoHash = runCatching {
+                    Magnet.parse(release.magnet).getOrThrow().infoHashHex
+                }.getOrNull()
+                container.libraryRepository.attachSource(
+                    id = id,
+                    sourceUri = release.magnet,
+                    label = "Download · ${release.provider} · ${release.detailLabel}",
+                    infoHash = infoHash,
+                )
+                container.torrentDownloadManager.start(item.title, release.magnet)
+            }
+        }
+
+        fun playDownloaded(item: MetadataCandidate, path: String) {
+            scope.launch {
+                val id = ensureLibraryId(item)
+                val file = java.io.File(path)
+                container.libraryRepository.attachSource(
+                    id = id,
+                    sourceUri = android.net.Uri.fromFile(file).toString(),
+                    label = "Downloaded · ${file.name}",
+                    infoHash = null,
+                )
+                val libraryItem = container.libraryRepository.find(id) ?: return@launch
+                catalogItem = null
+                container.playerEngine.play(libraryItem, null)
+                playerOpen = true
+            }
+        }
+
         BackHandler(enabled = playerOpen) { playerOpen = false }
         BackHandler(enabled = !playerOpen && addOpen) { addOpen = false }
-        BackHandler(enabled = !playerOpen && !addOpen && detailId != null) { detailId = null }
+        BackHandler(enabled = !playerOpen && !addOpen && catalogItem != null) { catalogItem = null }
+        BackHandler(enabled = !playerOpen && !addOpen && catalogItem == null && detailId != null) {
+            detailId = null
+        }
 
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             when {
@@ -173,6 +239,40 @@ fun StreamBuddyRoot(
                             addOpen = false
                             tab = Tab.SETTINGS
                         },
+                    )
+                }
+
+                catalogItem != null -> {
+                    val catalog = catalogItem!!
+                    CatalogDetailScreen(
+                        item = catalog,
+                        discover = container.discoverRepository,
+                        inLibrary = items.any {
+                            it.tmdbId == catalog.tmdbId && it.mediaType == catalog.mediaType
+                        },
+                        vpnBlocked = settings.requireVpnForNetwork && !vpn.active,
+                        download = downloadState,
+                        onBack = { catalogItem = null },
+                        onWatchNow = { item, release -> watchCatalog(item, release) },
+                        onDownload = { item, release -> downloadCatalog(item, release) },
+                        onPlayDownload = { item, path -> playDownloaded(item, path) },
+                        onAddToLibrary = { item ->
+                            scope.launch {
+                                val id = ensureLibraryId(item)
+                                catalogItem = null
+                                detailId = id
+                            }
+                        },
+                        onOpenBrowser = { url ->
+                            catalogItem = null
+                            browserUrl = url
+                            tab = Tab.BROWSER
+                        },
+                        onOpenSettings = {
+                            catalogItem = null
+                            tab = Tab.SETTINGS
+                        },
+                        onCancelDownload = { container.torrentDownloadManager.cancel() },
                     )
                 }
 
@@ -262,6 +362,13 @@ fun StreamBuddyRoot(
                                     } else {
                                         null
                                     },
+                                )
+
+                                Tab.DISCOVER -> DiscoverScreen(
+                                    discover = container.discoverRepository,
+                                    vpnBlocked = settings.requireVpnForNetwork && !vpn.active,
+                                    onOpen = { catalogItem = it },
+                                    onOpenSettings = { tab = Tab.SETTINGS },
                                 )
 
                                 Tab.STORAGE -> DownloadsScreen(
@@ -388,6 +495,12 @@ private fun BottomTabs(selected: Tab, onSelect: (Tab) -> Unit) {
             onClick = { onSelect(Tab.LIBRARY) },
             icon = { Icon(Icons.Filled.Home, contentDescription = null) },
             label = { Text("Library") },
+        )
+        NavigationBarItem(
+            selected = selected == Tab.DISCOVER,
+            onClick = { onSelect(Tab.DISCOVER) },
+            icon = { Icon(Icons.Filled.Star, contentDescription = null) },
+            label = { Text("Latest") },
         )
         NavigationBarItem(
             selected = selected == Tab.BROWSER,

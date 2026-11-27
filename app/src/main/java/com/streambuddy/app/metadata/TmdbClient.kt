@@ -43,14 +43,57 @@ class TmdbClient(
         parseList(fetch(url).optJSONArray("results"), allowPeople = true)
     }
 
+    /** Movies currently in cinemas. */
+    suspend fun nowPlayingMovies(): Result<List<MetadataCandidate>> = request {
+        val url = buildUrl("movie/now_playing") {
+            addQueryParameter("language", "en-US")
+            addQueryParameter("page", "1")
+        }
+        parseList(fetch(url).optJSONArray("results"), allowPeople = false)
+    }
+
+    /** Films with a release date in the near future. */
+    suspend fun upcomingMovies(): Result<List<MetadataCandidate>> = request {
+        val url = buildUrl("movie/upcoming") {
+            addQueryParameter("language", "en-US")
+            addQueryParameter("page", "1")
+        }
+        parseList(fetch(url).optJSONArray("results"), allowPeople = false)
+    }
+
+    /** Episodes airing this week on TV. */
+    suspend fun onTheAirShows(): Result<List<MetadataCandidate>> = request {
+        val url = buildUrl("tv/on_the_air") {
+            addQueryParameter("language", "en-US")
+            addQueryParameter("page", "1")
+        }
+        parseList(fetch(url).optJSONArray("results"), allowPeople = false)
+    }
+
     suspend fun details(candidate: MetadataCandidate): Result<MetadataCandidate> = request {
         val path = when (candidate.mediaType) {
             MediaType.MOVIE -> "movie/${candidate.tmdbId}"
             MediaType.TV -> "tv/${candidate.tmdbId}"
         }
-        val url = buildUrl(path) { addQueryParameter("language", "en-US") }
+        val url = buildUrl(path) {
+            addQueryParameter("language", "en-US")
+            addQueryParameter("append_to_response", "external_ids")
+        }
         val json = fetch(url)
         if (candidate.mediaType == MediaType.MOVIE) parseMovie(json) else parseTv(json)
+    }
+
+    /**
+     * IMDb id for a TMDB title. Only used when the user asks for a magnet, so
+     * the extra request is not made while browsing the catalogue.
+     */
+    suspend fun imdbId(candidate: MetadataCandidate): Result<String?> = request {
+        val path = when (candidate.mediaType) {
+            MediaType.MOVIE -> "movie/${candidate.tmdbId}/external_ids"
+            MediaType.TV -> "tv/${candidate.tmdbId}/external_ids"
+        }
+        val json = fetch(buildUrl(path) { addQueryParameter("language", "en-US") })
+        json.optString("imdb_id").trim().takeIf { it.matches(IMDB_ID_PATTERN) }
     }
 
     private fun parseList(array: JSONArray?, allowPeople: Boolean): List<MetadataCandidate> {
@@ -86,6 +129,7 @@ class TmdbClient(
                 rating = json.optDouble("vote_average").takeIf { it.isFinite() && it > 0 },
                 runtimeMinutes = null,
                 seasons = null,
+                releaseDate = date.takeIf { it.isNotBlank() },
             )
             if (results.size >= 40) break
         }
@@ -95,6 +139,7 @@ class TmdbClient(
     private fun parseMovie(json: JSONObject): MetadataCandidate {
         val genres = json.optJSONArray("genres").names()
         val companies = json.optJSONArray("production_companies").names()
+        val releaseDate = json.optString("release_date")
         return MetadataCandidate(
             tmdbId = json.optInt("id"),
             mediaType = MediaType.MOVIE,
@@ -102,12 +147,14 @@ class TmdbClient(
             overview = json.optString("overview").take(4_000),
             posterPath = imagePath(json.optString("poster_path")),
             backdropPath = imagePath(json.optString("backdrop_path")),
-            year = json.optString("release_date").take(4).toIntOrNull(),
+            year = releaseDate.take(4).toIntOrNull(),
             genres = genres,
             network = companies.firstOrNull(),
             rating = json.optDouble("vote_average").takeIf { it.isFinite() && it > 0 },
             runtimeMinutes = json.optInt("runtime", 0).takeIf { it > 0 },
             seasons = null,
+            releaseDate = releaseDate.takeIf { it.isNotBlank() },
+            imdbId = json.optString("imdb_id").trim().takeIf { it.matches(IMDB_ID_PATTERN) },
         )
     }
 
@@ -118,6 +165,11 @@ class TmdbClient(
         val runtime = if (runtimes != null && runtimes.length() > 0) {
             runtimes.optInt(0, 0).takeIf { it > 0 }
         } else null
+        val releaseDate = json.optString("first_air_date")
+        val imdbId = json.optJSONObject("external_ids")
+            ?.optString("imdb_id")
+            ?.trim()
+            ?.takeIf { it.matches(IMDB_ID_PATTERN) }
         return MetadataCandidate(
             tmdbId = json.optInt("id"),
             mediaType = MediaType.TV,
@@ -125,12 +177,14 @@ class TmdbClient(
             overview = json.optString("overview").take(4_000),
             posterPath = imagePath(json.optString("poster_path")),
             backdropPath = imagePath(json.optString("backdrop_path")),
-            year = json.optString("first_air_date").take(4).toIntOrNull(),
+            year = releaseDate.take(4).toIntOrNull(),
             genres = genres,
             network = networks.firstOrNull(),
             rating = json.optDouble("vote_average").takeIf { it.isFinite() && it > 0 },
             runtimeMinutes = runtime,
             seasons = json.optInt("number_of_seasons", 0).takeIf { it > 0 },
+            releaseDate = releaseDate.takeIf { it.isNotBlank() },
+            imdbId = imdbId,
         )
     }
 
@@ -202,6 +256,7 @@ class TmdbClient(
 
     companion object {
         private const val MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+        internal val IMDB_ID_PATTERN = Regex("^tt[0-9]{7,10}$")
 
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(12, TimeUnit.SECONDS)
@@ -258,6 +313,14 @@ class MetadataRepository(private val settingsStore: SettingsStore) {
     suspend fun search(query: String): Result<List<MetadataCandidate>> = client.search(query)
 
     suspend fun trending(): Result<List<MetadataCandidate>> = client.trending()
+
+    suspend fun nowPlaying(): Result<List<MetadataCandidate>> = client.nowPlayingMovies()
+
+    suspend fun upcoming(): Result<List<MetadataCandidate>> = client.upcomingMovies()
+
+    suspend fun onTheAir(): Result<List<MetadataCandidate>> = client.onTheAirShows()
+
+    suspend fun imdbId(candidate: MetadataCandidate): Result<String?> = client.imdbId(candidate)
 
     suspend fun enrich(candidate: MetadataCandidate): Result<MetadataCandidate> =
         client.details(candidate)
