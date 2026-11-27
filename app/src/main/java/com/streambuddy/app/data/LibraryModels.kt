@@ -113,6 +113,7 @@ data class LibraryQuery(
     val genre: String? = null,
     val network: String? = null,
     val status: LibraryStatus? = null,
+    val onlyWithSource: Boolean = false,
     val sort: LibrarySort = LibrarySort.RECENTLY_ADDED,
 )
 
@@ -120,6 +121,7 @@ data class LibraryQuery(
 object LibraryFilters {
 
     fun matches(item: LibraryItem, query: LibraryQuery): Boolean {
+        if (query.onlyWithSource && !item.hasSource) return false
         if (query.mediaType != null && item.mediaType != query.mediaType) return false
         if (query.status != null && item.status != query.status) return false
         if (query.genre != null && item.genres.none { it.equals(query.genre, ignoreCase = true) }) {

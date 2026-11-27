@@ -8,6 +8,7 @@ import androidx.media3.datasource.cache.Cache
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.CacheWriter
 import com.streambuddy.app.cache.CacheManager
+import com.streambuddy.app.net.NetworkGuard
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
@@ -30,6 +31,8 @@ import kotlinx.coroutines.withContext
 class PreCacheEngine(
     private val context: Context,
     private val fetcher: StreamFetcher = StreamFetcher(),
+    private val cacheProvider: () -> Cache = { CacheManager.get(context) },
+    private val cacheFactoryProvider: () -> CacheDataSource.Factory = { CacheManager.cacheDataSource(context) },
 ) {
 
     data class Progress(
@@ -59,6 +62,7 @@ class PreCacheEngine(
         preferHighestQuality: Boolean,
         onProgress: (Progress) -> Unit = {},
     ): Outcome = withContext(Dispatchers.IO) {
+        NetworkGuard.check()
         val kind = if (kindHint != StreamKind.UNKNOWN) kindHint else sniffKind(url)
         when (kind) {
             StreamKind.HLS -> prefetchHls(url, depthMs, preferHighestQuality, onProgress)
@@ -112,8 +116,8 @@ class PreCacheEngine(
         }
 
         val mediaSegments = plan.count { !it.isInitialization }
-        val cache = CacheManager.get(context)
-        val factory = CacheManager.cacheDataSource(context)
+        val cache = cacheProvider()
+        val factory = cacheFactoryProvider()
 
         var cachedBytes = cachedBytesOf(cache, plan)
         var cachedDurationMs = 0L
@@ -174,8 +178,8 @@ class PreCacheEngine(
             )
         }
 
-        val cache = CacheManager.get(context)
-        val factory = CacheManager.cacheDataSource(context)
+        val cache = cacheProvider()
+        val factory = cacheFactoryProvider()
         val job = currentCoroutineContext()[Job]
 
         fun report(bytes: Long) {

@@ -102,7 +102,7 @@ fun BrowserScreen(
     initialUrl: String? = null,
     onInitialUrlConsumed: () -> Unit = {},
     onAddSource: (title: String, uri: String, label: String?, infoHash: String?, mediaType: MediaType) -> Unit,
-    onAddTorrent: (title: String, file: java.io.File) -> Unit,
+    onAddTorrent: (title: String, file: java.io.File, mediaType: MediaType) -> Unit,
     onAddLocalMedia: (title: String, file: java.io.File) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
@@ -393,6 +393,8 @@ fun BrowserScreen(
             runCatching { webView.stopLoading() }
             if (webView.url != HOME_URL) webView.loadUrl(HOME_URL)
             status = VpnRequiredMessage.network
+        } else if (status == VpnRequiredMessage.network) {
+            status = null
         }
     }
 
@@ -749,6 +751,7 @@ fun BrowserScreen(
             var title by remember(file) {
                 mutableStateOf(file.name.removeSuffix(".torrent").take(300))
             }
+            var mediaType by remember(file) { mutableStateOf(MediaType.MOVIE) }
             AlertDialog(
                 onDismissRequest = { pendingTorrent = null },
                 title = { Text("Add this .torrent?") },
@@ -769,13 +772,23 @@ fun BrowserScreen(
                             label = { Text("Title") },
                             singleLine = true,
                         )
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            MediaType.entries.forEach { type ->
+                                FilterChip(
+                                    selected = mediaType == type,
+                                    onClick = { mediaType = type },
+                                    label = { Text(if (type == MediaType.MOVIE) "Movie" else "TV") },
+                                )
+                            }
+                        }
                     }
                 },
                 confirmButton = {
                     TextButton(
                         enabled = title.isNotBlank(),
                         onClick = {
-                            currentOnAddTorrent(title.trim(), file)
+                            currentOnAddTorrent(title.trim(), file, mediaType)
                             pendingTorrent = null
                             status = ".torrent added to your library."
                         },

@@ -1,6 +1,8 @@
 package com.streambuddy.app.torrent
 
 import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
 import com.streambuddy.app.data.AppSettings
 import com.streambuddy.app.data.SettingsStore
 import com.streambuddy.app.net.VpnMonitor
@@ -38,6 +40,13 @@ enum class TorrentPhase {
     ERROR,
 }
 
+data class TorrentFileChoice(
+    val index: Int,
+    val name: String,
+    val sizeBytes: Long,
+    val selected: Boolean,
+)
+
 data class TorrentUiState(
     val phase: TorrentPhase = TorrentPhase.IDLE,
     val title: String = "",
@@ -56,6 +65,8 @@ data class TorrentUiState(
     val seeding: Boolean = false,
     val paused: Boolean = false,
     val totalFiles: Int = 0,
+    val selectedFileIndex: Int = -1,
+    val files: List<TorrentFileChoice> = emptyList(),
 ) {
     val active: Boolean get() = phase in setOf(
         TorrentPhase.FETCHING_METADATA,
@@ -271,10 +282,19 @@ class TorrentManager(
 
                     val info = engine.awaitMetadata(settings.metadataTimeoutSeconds * 1_000L).getOrThrow()
                     val files = engine.files(info)
-                    val main = TorrentFilePolicy.chooseMainFile(files)
+                    val targetHeight = runCatching {
+                        val metrics = context.resources.displayMetrics
+                        minOf(metrics.widthPixels, metrics.heightPixels).coerceAtLeast(480)
+                    }.getOrDefault(1080)
+                    val main = TorrentFilePolicy.chooseMainFile(
+                        files = files,
+                        preferHighestQuality = settings.preferHighestQuality,
+                        targetHeightPx = targetHeight,
+                    )
                         ?: throw TorrentException(
                             "This torrent has no playable video or audio file. Stream Buddy only plays media files.",
                         )
+                    val playableFiles = TorrentFilePolicy.playableMediaFiles(files)
                     val subtitles = TorrentFilePolicy.subtitles(files).take(MAX_SUBTITLES)
                     val requiredBytes = main.size + subtitles.sumOf { it.size }
                     val quota = settings.torrentStorageLimitMb.toLong() * 1024L * 1024L
@@ -304,6 +324,7 @@ class TorrentManager(
                         handle = handle,
                         info = info2,
                         files = files,
+                        playableFiles = playableFiles,
                         mainFile = main,
                         offsets = offsets,
                         fileOffset = fileOffset,
@@ -340,6 +361,8 @@ class TorrentManager(
                         selectedFileSize = main.size,
                         totalBytes = main.size + subtitles.sumOf { it.size },
                         totalFiles = files.size,
+                        selectedFileIndex = main.index,
+                        files = session.fileChoices(),
                     )
 
                     val probe = minOf(main.size - startByte, 6L * 1024L * 1024L).coerceAtLeast(1L)
@@ -492,14 +515,227 @@ class TorrentManager(
         scope.launch { openMutex.withLock { closeInternal(deleteFiles = true, stopService = true) } }
     }
 
+    /**
+     * Switches the active torrent session to a different playable file (e.g.,
+     * another episode in a season pack or another quality encode).
+     */
+    suspend fun selectFile(index: Int): Result<TorrentOpenResult> = withContext(Dispatchers.IO) {
+        openMutex.withLock {
+            val session = active ?: return@withLock Result.failure(
+                TorrentException("No torrent is currently active."),
+            )
+            val chosen = session.playableFiles.firstOrNull { it.index == index }
+                ?: return@withLock Result.failure(
+                    TorrentException("That file is not playable in this torrent."),
+                )
+            val settings = settingsStore.current()
+            if (settings.requireVpnForNetwork && !vpnMonitor.isActive()) {
+                return@withLock Result.failure(TorrentException(VpnRequiredMessage.torrent))
+            }
+            val requiredBytes = chosen.size + session.subtitles.sumOf { it.size }
+            val quota = settings.torrentStorageLimitMb.toLong() * 1024L * 1024L
+            if (requiredBytes > quota) {
+                return@withLock Result.failure(
+                    TorrentException(
+                        "This file needs ${com.streambuddy.app.core.Fmt.bytes(requiredBytes)} but the torrent " +
+                            "storage limit is ${com.streambuddy.app.core.Fmt.bytes(quota)}. Raise the limit in Settings.",
+                    ),
+                )
+            }
+            return@withLock try {
+                pollJob?.cancel()
+                engine.clearDeadlines(session.handle, session.deadlines)
+                val newOffset = session.offsets.getOrElse(chosen.index) { 0L }
+                session.mainFile = chosen
+                session.fileOffset = newOffset
+                session.lastFraction = 0.0
+                session.lastWindowUpdateMs = 0L
+
+                engine.selectFiles(
+                    session.handle,
+                    session.files,
+                    chosen.index,
+                    session.subtitles.map { it.index }.toSet(),
+                )
+                engine.resume(session.handle)
+                engine.updatePlayhead(
+                    handle = session.handle,
+                    info = session.info,
+                    fileOffset = newOffset,
+                    fileSize = chosen.size,
+                    positionInFile = 0L,
+                    bufferAheadBytes = bufferAheadBytes(settings),
+                    previousDeadlines = session.deadlines,
+                )
+                _state.value = _state.value.copy(
+                    phase = TorrentPhase.BUFFERING,
+                    selectedFileName = chosen.fileName,
+                    selectedFileSize = chosen.size,
+                    selectedFileIndex = chosen.index,
+                    files = session.fileChoices(),
+                    paused = false,
+                    error = null,
+                )
+                val probe = minOf(chosen.size, 6L * 1024L * 1024L).coerceAtLeast(1L)
+                val ready = engine.awaitRangeSuspending(
+                    handle = session.handle,
+                    pieceLength = session.pieceLength,
+                    start = newOffset,
+                    endExclusive = newOffset + probe,
+                    timeoutMs = FIRST_BUFFER_TIMEOUT_MS,
+                )
+                if (!ready) {
+                    throw TorrentException("Peers did not deliver the selected file in time.")
+                }
+                val mediaPath = chosen.safePath
+                if (!mediaPath.isNullOrBlank()) {
+                    val report = securityCenter.scanForPlayback(
+                        File(session.directory, mediaPath),
+                        "Torrent · ${chosen.fileName}",
+                    )
+                    if (report?.blocked == true) {
+                        throw TorrentException("Malware scan blocked this file: ${report.summary}")
+                    }
+                }
+                _state.value = _state.value.copy(phase = TorrentPhase.STREAMING)
+                startPolling()
+                Result.success(
+                    TorrentOpenResult(
+                        mediaUrl = session.server.mediaUrl(),
+                        title = session.magnet.displayName.orEmpty().ifBlank { chosen.fileName },
+                        infoHash = session.magnet.infoHashHex,
+                        fileName = chosen.fileName,
+                        fileSizeBytes = chosen.size,
+                        subtitles = session.subtitles.mapIndexed { idx, sub ->
+                            TorrentSubtitle(idx, sub.fileName, session.server.subtitleUrl(idx))
+                        },
+                        peers = engine.status(session.handle)?.numPeers() ?: 0,
+                        totalFiles = session.files.size,
+                    ),
+                )
+            } catch (throwable: Throwable) {
+                if (throwable is CancellationException) throw throwable
+                val message = throwable.message ?: "Could not switch torrent file."
+                _state.value = _state.value.copy(error = message)
+                Result.failure(TorrentException(message, throwable))
+            }
+        }
+    }
+
+    /** Next playable video file after the currently active one, if this is a multi-file torrent. */
+    fun nextPlayableFileIndex(): Int? {
+        val session = active ?: return null
+        val list = session.playableFiles
+        val pos = list.indexOfFirst { it.index == session.mainFile.index }
+        return if (pos >= 0 && pos + 1 < list.size) list[pos + 1].index else null
+    }
+
     fun clearTorrentStorage() {
         scope.launch(Dispatchers.IO) {
             if (active == null) {
-                runCatching { torrentRoot.deleteRecursively() }
+                runCatching {
+                    torrentRoot.listFiles()?.forEach { child ->
+                        // Keep persistent imported/created .torrent metadata referenced by Library entries.
+                        if (child.name != "meta") {
+                            child.deleteRecursively()
+                        }
+                    }
+                }
                 torrentRoot.mkdirs()
             }
         }
     }
+
+    suspend fun importTorrentUri(uri: Uri): Result<ImportedTorrent> = withContext(Dispatchers.IO) {
+        runCatching {
+            val scheme = uri.scheme?.lowercase(Locale.US)
+            if (scheme == "file") {
+                val path = uri.path ?: throw TorrentException("Missing .torrent file path.")
+                return@runCatching importTorrentFile(File(path)).getOrThrow()
+            }
+            val tempDir = File(context.cacheDir, "torrent_imports").apply { mkdirs() }
+            val tempFile = File(tempDir, "import-${System.currentTimeMillis()}.torrent")
+            try {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    tempFile.outputStream().use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        var total = 0L
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read <= 0) break
+                            total += read
+                            if (total > MAX_IMPORTED_TORRENT_BYTES) {
+                                throw TorrentException("That .torrent file exceeds 20 MB.")
+                            }
+                            output.write(buffer, 0, read)
+                        }
+                    }
+                } ?: throw TorrentException("Cannot read the selected .torrent file.")
+                importTorrentFile(tempFile).getOrThrow()
+            } finally {
+                runCatching { tempFile.delete() }
+            }
+        }
+    }
+
+    suspend fun createTorrentFromUri(
+        uri: Uri,
+        label: String = "StreamBuddy",
+        comment: String? = null,
+        trackers: List<String> = emptyList(),
+        isPrivate: Boolean = true,
+    ): Result<CreatedTorrent> = withContext(Dispatchers.IO) {
+        val scheme = uri.scheme?.lowercase(Locale.US)
+        if (scheme == "file") {
+            val path = uri.path ?: return@withContext Result.failure(TorrentException("Missing source file path."))
+            return@withContext createTorrentFile(File(path), label, comment, trackers, isPrivate)
+        }
+        if (scheme != "content") {
+            return@withContext Result.failure(TorrentException("Pick a local video file to build a .torrent."))
+        }
+        val buildDir = File(context.cacheDir, "torrent_build").apply { mkdirs() }
+        val displayName = resolveDisplayName(uri)
+            ?.replace(Regex("[^A-Za-z0-9._ -]"), "_")
+            ?.trim()
+            ?.take(120)
+            ?.takeIf { it.isNotBlank() }
+            ?: "video.mp4"
+        val staged = File(buildDir, displayName)
+        try {
+            val copied = context.contentResolver.openInputStream(uri)?.use { input ->
+                staged.outputStream().use { output ->
+                    val buffer = ByteArray(128 * 1024)
+                    var total = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read <= 0) break
+                        total += read
+                        if (total > MAX_BUILD_SOURCE_BYTES) {
+                            throw TorrentException("Video exceeds the 4 GB torrent creation limit.")
+                        }
+                        output.write(buffer, 0, read)
+                    }
+                    output.flush()
+                }
+                true
+            } ?: false
+            if (!copied || !staged.isFile || staged.length() <= 0L) {
+                return@withContext Result.failure(TorrentException("Could not read the selected video file."))
+            }
+            createTorrentFile(staged, label, comment, trackers, isPrivate)
+        } catch (throwable: Throwable) {
+            if (throwable is CancellationException) throw throwable
+            Result.failure(TorrentException(throwable.message ?: "Could not create .torrent.", throwable))
+        } finally {
+            runCatching { staged.delete() }
+        }
+    }
+
+    private fun resolveDisplayName(uri: Uri): String? = runCatching {
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        }
+    }.getOrNull() ?: uri.lastPathSegment?.substringAfterLast('/')
 
     /**
      * Create a .torrent from a user-owned file.
@@ -524,6 +760,8 @@ class TorrentManager(
         sourceFile: File,
         label: String = "StreamBuddy",
         comment: String? = null,
+        trackers: List<String> = emptyList(),
+        isPrivate: Boolean = true,
     ): Result<CreatedTorrent> = withContext(Dispatchers.IO) {
         if (!sourceFile.isFile || sourceFile.length() <= 0L) {
             return@withContext Result.failure(
@@ -540,10 +778,15 @@ class TorrentManager(
         runCatching {
             val builder = TorrentBuilder()
             builder.path(sourceFile)
-            builder.comment(label)
+            builder.comment(comment?.takeIf { it.isNotBlank() } ?: label)
             builder.creationDate(System.currentTimeMillis() / 1000L)
-            if (comment?.isNotBlank() == true) builder.comment(comment)
-            builder.setPrivate(true)
+            builder.setPrivate(isPrivate)
+            trackers
+                .map { it.trim() }
+                .filter { it.startsWith("https://", true) || it.startsWith("http://", true) || it.startsWith("udp://", true) }
+                .distinct()
+                .take(20)
+                .forEach { tracker -> builder.addTracker(tracker) }
 
             val torrentBytes = builder.generate().entry().bencode()
             val infoHash = TorrentInfo(torrentBytes).infoHash().toHex()
@@ -566,9 +809,14 @@ class TorrentManager(
         }
     }
 
-    /** Bytes currently used by torrent data and metadata in app-private storage. */
+    /** Bytes currently used by temporary torrent piece scratch in app-private storage. */
     fun storageUsedBytes(): Long = runCatching {
-        torrentRoot.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+        torrentRoot.listFiles()
+            ?.filter { it.name != "meta" }
+            ?.sumOf { entry ->
+                if (entry.isFile) entry.length()
+                else entry.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+            } ?: 0L
     }.getOrDefault(0L)
 
     /** Files being written by the active torrent, excluded from manual scans. */
@@ -613,6 +861,8 @@ class TorrentManager(
                         seeding = status.isSeeding() && settings.seedingEnabled,
                         paused = _state.value.phase == TorrentPhase.PAUSED,
                         totalFiles = session.files.size,
+                        selectedFileIndex = session.mainFile.index,
+                        files = session.fileChoices(),
                     )
                 }
                 delay(POLL_INTERVAL_MS)
@@ -660,9 +910,10 @@ class TorrentManager(
         val handle: TorrentHandle,
         val info: TorrentInfo,
         val files: List<SafeTorrentFile>,
-        val mainFile: SafeTorrentFile,
+        val playableFiles: List<SafeTorrentFile>,
+        @Volatile var mainFile: SafeTorrentFile,
         val offsets: LongArray,
-        val fileOffset: Long,
+        @Volatile var fileOffset: Long,
         val pieceLength: Long,
         val subtitles: List<SafeTorrentFile>,
         val startFraction: Double,
@@ -671,6 +922,15 @@ class TorrentManager(
         val deadlines = HashSet<Int>()
         @Volatile var lastFraction: Double = startFraction
         @Volatile var lastWindowUpdateMs: Long = 0L
+
+        fun fileChoices(): List<TorrentFileChoice> = playableFiles.map { file ->
+            TorrentFileChoice(
+                index = file.index,
+                name = file.fileName,
+                sizeBytes = file.size,
+                selected = file.index == mainFile.index,
+            )
+        }
 
         fun mediaFile(): ServedFile? {
             val path = mainFile.safePath ?: return null
@@ -721,6 +981,8 @@ class TorrentManager(
         const val MIN_AHEAD_BYTES = 12L * 1024L * 1024L
         const val MAX_AHEAD_BYTES = 512L * 1024L * 1024L
         const val MAX_SUBTITLES = 12
+        const val MAX_IMPORTED_TORRENT_BYTES = 20L * 1024L * 1024L
+        const val MAX_BUILD_SOURCE_BYTES = 4L * 1024L * 1024L * 1024L
 
         val VPN_SENSITIVE_PHASES = setOf(
             TorrentPhase.FETCHING_METADATA,

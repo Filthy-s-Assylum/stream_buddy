@@ -55,6 +55,9 @@ interface LibraryDao {
     @Query("SELECT * FROM library ORDER BY addedAt DESC")
     fun observeAll(): Flow<List<LibraryEntity>>
 
+    @Query("SELECT * FROM library ORDER BY addedAt DESC")
+    suspend fun allOnce(): List<LibraryEntity>
+
     @Query("SELECT * FROM library WHERE id = :id")
     suspend fun find(id: Long): LibraryEntity?
 
@@ -102,6 +105,8 @@ interface LibraryDao {
 class LibraryRepository(private val dao: LibraryDao) {
 
     val items: Flow<List<LibraryItem>> = dao.observeAll().map { rows -> rows.map(::toItem) }
+
+    suspend fun allOnce(): List<LibraryItem> = dao.allOnce().map(::toItem)
 
     suspend fun find(id: Long): LibraryItem? = dao.find(id)?.let(::toItem)
 

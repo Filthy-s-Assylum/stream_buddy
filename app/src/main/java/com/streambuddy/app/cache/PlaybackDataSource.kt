@@ -4,7 +4,6 @@ import android.net.Uri
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.TransferListener
 import androidx.media3.datasource.cache.CacheDataSource
 import com.streambuddy.app.torrent.MagnetLink
@@ -20,7 +19,7 @@ import com.streambuddy.app.torrent.MagnetLink
 @androidx.annotation.OptIn(UnstableApi::class)
 class PlaybackDataSourceFactory(
     private val cacheFactory: CacheDataSource.Factory,
-    private val networkFactory: DefaultHttpDataSource.Factory,
+    private val networkFactory: DataSource.Factory,
     /** Reads `streambuddy-torrent://` URIs straight from the BitTorrent engine. */
     private val torrentFactory: DataSource.Factory? = null,
 ) : DataSource.Factory {

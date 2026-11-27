@@ -44,6 +44,15 @@ class AppSettingsTest {
     }
 
     @Test
+    fun `sanitized trims and caps preferredSubtitleLanguage`() {
+        val sanitized = AppSettings(
+            preferredSubtitleLanguage = "  en-US-something-too-long  ",
+        ).sanitized()
+        assertEquals("en-US-something-", sanitized.preferredSubtitleLanguage)
+        assertEquals("es", AppSettings(preferredSubtitleLanguage = "  es  ").sanitized().preferredSubtitleLanguage)
+    }
+
+    @Test
     fun `encode and decode roundtrip preserves all settings`() {
         val original = AppSettings(
             prefetchMinutes = 10,

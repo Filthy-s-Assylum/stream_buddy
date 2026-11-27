@@ -97,5 +97,5 @@ object SharedLink {
         return null
     }
 
-    val KNOWN_TABS = setOf("apps", "queue", "player", "settings")
+    val KNOWN_TABS = setOf("apps", "queue", "library", "browser", "storage", "player", "settings")
 }

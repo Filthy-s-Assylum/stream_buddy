@@ -66,6 +66,18 @@ class SharedLinkTest {
             SharedLink.Target.Tab("settings"),
             SharedLink.parse(actionView, "streambuddy://settings?from=shortcut", null),
         )
+        assertEquals(
+            SharedLink.Target.Tab("browser"),
+            SharedLink.parse(actionView, "streambuddy://browser", null),
+        )
+        assertEquals(
+            SharedLink.Target.Tab("storage"),
+            SharedLink.parse(actionView, "streambuddy://storage", null),
+        )
+        assertEquals(
+            SharedLink.Target.Tab("library"),
+            SharedLink.parse(actionView, "streambuddy://library", null),
+        )
     }
 
     @Test

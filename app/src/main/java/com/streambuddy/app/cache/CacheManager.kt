@@ -4,11 +4,12 @@ import android.content.Context
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DataSource
-import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.cache.CacheDataSink
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import com.streambuddy.app.net.Http
 import com.streambuddy.app.torrent.TorrentDataSourceFactory
 import java.io.File
@@ -38,12 +39,9 @@ object CacheManager {
         ).also { instance = it }
     }
 
-    /** Plain HTTP data source (no cache). */
-    fun networkDataSource(): DefaultHttpDataSource.Factory = DefaultHttpDataSource.Factory()
+    /** VPN-guarded HTTP data source (no cache). */
+    fun networkDataSource(): HttpDataSource.Factory = OkHttpDataSource.Factory(Http.mediaClient)
         .setUserAgent(Http.USER_AGENT)
-        .setConnectTimeoutMs(20_000)
-        .setReadTimeoutMs(30_000)
-        .setAllowCrossProtocolRedirects(true)
 
     /**
      * Cache-first data source. Reads served from disk, misses go upstream and are written back —

@@ -92,18 +92,57 @@ object TorrentFilePolicy {
     }
 
     /**
-     * Chooses the main video: the largest video file, ignoring obvious sample
-     * clips unless nothing else exists. Audio-only torrents are supported as a
-     * fallback so podcasts and music are not rejected.
+     * Chooses the main video: when [preferHighestQuality] is true, chooses the
+     * largest non-sample video. When false, prefers a resolution that matches
+     * [targetHeightPx] without oversized 4K/remux bloat. Audio-only torrents
+     * are supported as a fallback so podcasts and music are not rejected.
      */
-    fun chooseMainFile(files: List<SafeTorrentFile>): SafeTorrentFile? {
+    fun chooseMainFile(files: List<SafeTorrentFile>): SafeTorrentFile? =
+        chooseMainFile(files, preferHighestQuality = true)
+
+    fun chooseMainFile(
+        files: List<SafeTorrentFile>,
+        preferHighestQuality: Boolean,
+        targetHeightPx: Int = 1080,
+    ): SafeTorrentFile? {
         val playable = files.filter { it.playable && it.rejection == null }
         val videos = playable.filter { it.kind == FileKind.VIDEO }
         if (videos.isEmpty()) return playable.maxByOrNull { it.size }
         val nonSamples = videos.filterNot { isSample(it) }
         val pool = if (nonSamples.isNotEmpty()) nonSamples else videos
-        return pool.maxByOrNull { it.size }
+        if (preferHighestQuality || pool.size <= 1) {
+            return pool.maxByOrNull { it.size }
+        }
+        val target = targetHeightPx.coerceIn(480, 2160)
+        return pool.minWithOrNull(
+            compareBy<SafeTorrentFile> { file ->
+                val height = advertisedHeight(file.fileName)
+                when {
+                    height == null -> 1_000
+                    height > target + 120 -> 2_000 + (height - target)
+                    else -> kotlin.math.abs(target - height)
+                }
+            }.thenBy { it.size },
+        )
     }
+
+    fun playableMediaFiles(files: List<SafeTorrentFile>): List<SafeTorrentFile> =
+        files
+            .filter { it.playable && it.rejection == null }
+            .sortedWith(
+                compareBy<SafeTorrentFile> { isSample(it) }
+                    .thenBy { (it.safePath ?: it.path).lowercase(Locale.US) },
+            )
+
+    private fun advertisedHeight(name: String): Int? =
+        RESOLUTION_PATTERN.find(name)?.let { match ->
+            when (val token = match.groupValues[1].lowercase(Locale.US)) {
+                "4k" -> 2160
+                "8k" -> 4320
+                "2k" -> 1440
+                else -> token.removeSuffix("p").toIntOrNull()?.takeIf { it in 240..4320 }
+            }
+        }
 
     fun isSample(file: SafeTorrentFile): Boolean {
         val name = file.fileName.lowercase(Locale.US)
@@ -123,6 +162,8 @@ object TorrentFilePolicy {
             .ifBlank { "torrent" }
         return "${infoHash.take(16).lowercase(Locale.US)}-$cleaned"
     }
+
+    private val RESOLUTION_PATTERN = Regex("(?i)(\\d{3,4}p|4k|8k|2k)")
 
     private val ILLEGAL_CHARACTERS = setOf(
         '<', '>', ':', '"', '|', '?', '*', '\u007f',

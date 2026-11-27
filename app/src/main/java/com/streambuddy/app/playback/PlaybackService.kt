@@ -20,7 +20,11 @@ class PlaybackService : MediaSessionService() {
 
     override fun onTaskRemoved(rootIntent: android.content.Intent?) {
         val engine = AppGraph.containerOrNull()?.playerEngine
-        if (engine == null || !engine.player.isPlaying) {
+        val active = engine != null && (
+            engine.player.isPlaying ||
+                (engine.player.playWhenReady && engine.player.playbackState != androidx.media3.common.Player.STATE_ENDED)
+            )
+        if (!active) {
             stopSelf()
         } else {
             super.onTaskRemoved(rootIntent)

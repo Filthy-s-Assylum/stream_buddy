@@ -23,6 +23,7 @@ import com.streambuddy.app.data.AppDb
 import com.streambuddy.app.data.SettingsRepository
 import com.streambuddy.app.data.StreamDao
 import com.streambuddy.app.data.StreamEntity
+import com.streambuddy.app.net.NetworkGuard
 import com.streambuddy.app.stream.CacheState
 import com.streambuddy.app.stream.DrmProtectedException
 import com.streambuddy.app.stream.PlaylistParseException
@@ -52,6 +53,7 @@ class PreCacheWorker(
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result {
+        if (NetworkGuard.isBlocked()) return Result.retry()
         val streamId = inputData.getLong(KEY_STREAM_ID, NO_STREAM_ID)
         if (streamId == NO_STREAM_ID) return Result.failure()
 
