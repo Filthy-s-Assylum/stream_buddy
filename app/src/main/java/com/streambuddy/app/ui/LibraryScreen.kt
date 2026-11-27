@@ -73,6 +73,7 @@ fun LibraryScreen(
     vpnWarning: String? = null,
     predictions: Map<Long, Prediction> = emptyMap(),
     preCacheStates: Map<Long, LibraryPreCacheState> = emptyMap(),
+    onShowLatest: (() -> Unit)? = null,
     contentPadding: androidx.compose.foundation.layout.PaddingValues = androidx.compose.foundation.layout.PaddingValues(0.dp),
 ) {
     var query by remember { mutableStateOf(LibraryQuery()) }
@@ -134,6 +135,23 @@ fun LibraryScreen(
                 .padding(padding)
                 .padding(contentPadding),
         ) {
+            if (onShowLatest != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilterChip(
+                        selected = true,
+                        onClick = {},
+                        label = { Text("My Library") },
+                    )
+                    FilterChip(
+                        selected = false,
+                        onClick = onShowLatest,
+                        label = { Text("Latest · TMDB") },
+                    )
+                }
+            }
             if (vpnWarning != null) {
                 Row(
                     modifier = Modifier
@@ -219,13 +237,23 @@ fun LibraryScreen(
             }
 
             if (items.isEmpty()) {
-                EmptyState(
-                    title = "Your library is empty",
-                    detail = "Add a movie or show from TMDB, then attach your own authorised magnet, download link or local file. " +
-                        "Stream Buddy never searches for or supplies copyrighted content.",
-                    actionLabel = "Add a title",
-                    onAction = onAdd,
-                )
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    EmptyState(
+                        title = "Your library is empty",
+                        detail = "Add a movie or show from TMDB, then attach your own authorised magnet, download link or local file. " +
+                            "Stream Buddy never searches for or supplies copyrighted content.",
+                        actionLabel = "Add a title",
+                        onAction = onAdd,
+                    )
+                    if (onShowLatest != null) {
+                        TextButton(onClick = onShowLatest) {
+                            Text("Browse Latest on TMDB")
+                        }
+                    }
+                }
             } else if (filtered.isEmpty()) {
                 EmptyState(
                     title = "Nothing matches",

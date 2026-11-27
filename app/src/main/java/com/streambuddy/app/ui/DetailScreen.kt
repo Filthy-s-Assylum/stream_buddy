@@ -101,7 +101,7 @@ fun DetailScreen(
     onWatchInBrowser: (String) -> Unit,
 ) {
     if (item == null) {
-        EmptyState("Title not found", "It may have been deleted.", "Back", onBack)
+        EmptyState("Title not found", "It may have been deleted.", actionLabel = "Back", onAction = onBack)
         return
     }
 
@@ -422,50 +422,53 @@ fun DetailScreen(
                         TextButton(onClick = { onClearSource(item) }) { Text("Remove source") }
                         if (Downloads.isHttpUri(item.sourceUri.orEmpty())) {
                             val currentDownload = download
-                            when (currentDownload?.state) {
-                                null -> TextButton(
+                            if (currentDownload == null) {
+                                TextButton(
                                     onClick = {
                                         onDownload(item)
                                         downloadTick++
                                     },
                                     enabled = !vpnBlocked,
                                 ) { Text("Download first") }
+                            } else {
+                                when (currentDownload.state) {
+                                    Download.STATE_DOWNLOADING,
+                                    Download.STATE_QUEUED,
+                                    Download.STATE_RESTARTING,
+                                    -> TextButton(onClick = {
+                                        Downloads.pause(context, currentDownload.request.id)
+                                        downloadTick++
+                                    }) {
+                                        val pct = currentDownload.percentDownloaded.takeIf { it >= 0f }?.toInt()
+                                        Text(if (pct != null) "Pause ($pct%)" else "Pause download")
+                                    }
 
-                                Download.STATE_DOWNLOADING,
-                                Download.STATE_QUEUED,
-                                Download.STATE_RESTARTING,
-                                -> TextButton(onClick = {
-                                    Downloads.pause(context, currentDownload.request.id)
-                                    downloadTick++
-                                }) {
-                                    val pct = currentDownload.percentDownloaded.takeIf { it >= 0f }?.toInt()
-                                    Text(if (pct != null) "Pause ($pct%)" else "Pause download")
+                                    Download.STATE_STOPPED -> TextButton(
+                                        onClick = {
+                                            runCatching { Downloads.resume(context, currentDownload.request.id) }
+                                            downloadTick++
+                                        },
+                                        enabled = !vpnBlocked,
+                                    ) { Text("Resume download") }
+
+                                    Download.STATE_FAILED -> TextButton(
+                                        onClick = {
+                                            runCatching { Downloads.retry(context, currentDownload) }
+                                            downloadTick++
+                                        },
+                                        enabled = !vpnBlocked,
+                                    ) { Text("Retry download") }
+
+                                    Download.STATE_COMPLETED -> TextButton(
+                                        onClick = {
+                                            Downloads.remove(context, currentDownload.request.id)
+                                            downloadTick++
+                                        },
+                                    ) { Text("Ready offline · Remove") }
+
+                                    Download.STATE_REMOVING -> Unit
+                                    else -> Unit
                                 }
-
-                                Download.STATE_STOPPED -> TextButton(
-                                    onClick = {
-                                        runCatching { Downloads.resume(context, currentDownload.request.id) }
-                                        downloadTick++
-                                    },
-                                    enabled = !vpnBlocked,
-                                ) { Text("Resume download") }
-
-                                Download.STATE_FAILED -> TextButton(
-                                    onClick = {
-                                        runCatching { Downloads.retry(context, currentDownload) }
-                                        downloadTick++
-                                    },
-                                    enabled = !vpnBlocked,
-                                ) { Text("Retry download") }
-
-                                Download.STATE_COMPLETED -> TextButton(
-                                    onClick = {
-                                        Downloads.remove(context, currentDownload.request.id)
-                                        downloadTick++
-                                    },
-                                ) { Text("Ready offline · Remove") }
-
-                                else -> Unit
                             }
 
                             when (preCacheState?.state) {

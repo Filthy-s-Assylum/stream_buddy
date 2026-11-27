@@ -66,6 +66,7 @@ class MagnetLinkTest {
     fun parsesExactLength() {
         val magnet = MagnetLink.parse("magnet:?xt=urn:btih:$hexHash&xl=1234567")
         assertEquals(1234567L, magnet!!.exactLengthBytes)
+        assertEquals(1234567L, magnet.exactLength)
     }
 
     @Test

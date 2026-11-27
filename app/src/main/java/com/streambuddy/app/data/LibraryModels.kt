@@ -77,6 +77,10 @@ data class MetadataCandidate(
     val rating: Double?,
     val runtimeMinutes: Int?,
     val seasons: Int?,
+    /** ISO date from TMDB, used to sort the "latest" catalogue. */
+    val releaseDate: String? = null,
+    /** IMDb id, used only to look up a user-requested magnet. */
+    val imdbId: String? = null,
 ) {
     fun toLibraryItem(): LibraryItem {
         val now = System.currentTimeMillis()

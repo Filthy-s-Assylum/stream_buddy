@@ -51,6 +51,8 @@ import com.streambuddy.app.core.Fmt
 import com.streambuddy.app.data.LibraryItem
 import com.streambuddy.app.download.Downloads
 import com.streambuddy.app.stream.CacheState
+import com.streambuddy.app.torrent.TorrentDownloadState
+import com.streambuddy.app.torrent.TorrentDownloadStatus
 import com.streambuddy.app.torrent.TorrentUiState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -83,6 +85,9 @@ fun DownloadsScreen(
     onCancelPreCache: (Long) -> Unit,
     onRunSmartPrefetch: () -> Unit,
     onOpenSettings: () -> Unit,
+    torrentDownload: TorrentDownloadState? = null,
+    onCancelTorrentDownload: () -> Unit = {},
+    onPlayTorrentDownload: (String) -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -241,6 +246,63 @@ fun DownloadsScreen(
             item {
                 Spacer(Modifier.height(8.dp))
                 SectionTitle("Offline downloads")
+            }
+
+            if (torrentDownload != null && torrentDownload.status != TorrentDownloadStatus.IDLE) {
+                item(key = "torrent-offline-dl") {
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    ) {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                torrentDownload.title.ifBlank { torrentDownload.fileName.ifBlank { "Torrent download" } },
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                when (torrentDownload.status) {
+                                    TorrentDownloadStatus.PREPARING -> "Fetching torrent metadata…"
+                                    TorrentDownloadStatus.DOWNLOADING -> buildString {
+                                        append(Fmt.percent(torrentDownload.progress))
+                                        append(" · ").append(Fmt.bytes(torrentDownload.downloadedBytes))
+                                        append(" / ").append(Fmt.bytes(torrentDownload.totalBytes))
+                                        if (torrentDownload.rateBps > 0) {
+                                            append(" · ").append(Fmt.rate(torrentDownload.rateBps.toDouble()))
+                                        }
+                                        if (torrentDownload.peers > 0) {
+                                            append(" · ").append(torrentDownload.peers).append(" peers")
+                                        }
+                                    }
+                                    TorrentDownloadStatus.COMPLETED -> "Completed · ${torrentDownload.fileName}"
+                                    TorrentDownloadStatus.FAILED -> torrentDownload.error ?: "Failed"
+                                    TorrentDownloadStatus.CANCELLED -> "Cancelled"
+                                    TorrentDownloadStatus.IDLE -> ""
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (torrentDownload.status == TorrentDownloadStatus.FAILED) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                            if (torrentDownload.status == TorrentDownloadStatus.DOWNLOADING) {
+                                ProgressLine(torrentDownload.progress)
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (torrentDownload.active) {
+                                    TextButton(onClick = onCancelTorrentDownload) { Text("Cancel") }
+                                }
+                                val path = torrentDownload.filePath
+                                if (torrentDownload.status == TorrentDownloadStatus.COMPLETED && !path.isNullOrBlank()) {
+                                    Button(onClick = { onPlayTorrentDownload(path) }) { Text("Play") }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             if (downloads.isEmpty()) {
@@ -490,6 +552,10 @@ private fun DownloadRow(
                         onClick = onRetry,
                         enabled = !vpnBlocked,
                     ) { Text("Retry") }
+
+                    Download.STATE_COMPLETED,
+                    Download.STATE_REMOVING,
+                    -> Unit
                 }
                 IconButton(onClick = onRemove) {
                     Icon(Icons.Filled.Delete, contentDescription = "Remove download")

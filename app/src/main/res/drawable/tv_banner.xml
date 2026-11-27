@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android TV banner (320x180). Vector drawables cannot render text, so the
+    banner uses the app mark: a cyan play button over a dark film strip. The
+    launcher still shows the "Stream Buddy" label underneath.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+
+    <path
+        android:fillColor="#0D1117"
+        android:pathData="M0,0h320v180h-320z" />
+
+    <path
+        android:fillColor="#161B22"
+        android:pathData="M0,0h320v34h-320zM0,146h320v34h-320z" />
+
+    <path
+        android:fillColor="#30363D"
+        android:pathData="M12,10h10v14h-10zM34,10h10v14h-10zM56,10h10v14h-10zM78,10h10v14h-10zM100,10h10v14h-10zM122,10h10v14h-10zM144,10h10v14h-10zM166,10h10v14h-10zM188,10h10v14h-10zM210,10h10v14h-10zM232,10h10v14h-10zM254,10h10v14h-10zM276,10h10v14h-10zM298,10h10v14h-10z" />
+    <path
+        android:fillColor="#30363D"
+        android:pathData="M12,156h10v14h-10zM34,156h10v14h-10zM56,156h10v14h-10zM78,156h10v14h-10zM100,156h10v14h-10zM122,156h10v14h-10zM144,156h10v14h-10zM166,156h10v14h-10zM188,156h10v14h-10zM210,156h10v14h-10zM232,156h10v14h-10zM254,156h10v14h-10zM276,156h10v14h-10zM298,156h10v14h-10z" />
+
+    <path
+        android:fillColor="#4CC9F0"
+        android:pathData="M132,62L132,118L186,90Z" />
+
+    <path
+        android:fillColor="#8B949E"
+        android:pathData="M206,82h44v6h-44zM206,96h30v6h-30z" />
+</vector>
