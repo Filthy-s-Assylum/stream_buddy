@@ -53,8 +53,18 @@ class PlaybackAnalytics {
     private var bitrateBps = 0L
     private var selectedTracks = ""
     private var lastCacheRefresh = 0L
+
+    @Volatile
     private var cachedUsage = 0L
+
+    @Volatile
     private var cachedMax = 0L
+
+    fun updateCacheUsage(bytes: Long, maxBytes: Long) {
+        cachedUsage = bytes
+        cachedMax = maxBytes
+        lastCacheRefresh = System.currentTimeMillis()
+    }
 
     fun reset() {
         sessionStartedAt = System.currentTimeMillis()

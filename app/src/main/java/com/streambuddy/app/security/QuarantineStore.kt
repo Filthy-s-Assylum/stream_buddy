@@ -95,7 +95,11 @@ class QuarantineStore(context: Context) {
         runCatching {
             if (!manifest.exists()) return@runCatching
             val kept = manifest.readLines().filterNot { line ->
-                line.contains("\"id\":\"${entry.id}\"")
+                if (line.isBlank()) {
+                    true
+                } else {
+                    runCatching { JSONObject(line).optString("id") == entry.id }.getOrDefault(false)
+                }
             }
             manifest.writeText(kept.joinToString("\n").let { if (it.isBlank()) "" else "$it\n" })
         }

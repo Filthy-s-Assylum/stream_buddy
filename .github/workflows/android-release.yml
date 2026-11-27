@@ -40,6 +40,9 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Point Gradle at the preinstalled Android SDK
+        run: echo "sdk.dir=$ANDROID_HOME" > local.properties
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
@@ -48,11 +51,20 @@ jobs:
 
       - name: Build signed release APK
         env:
-          RELEASE_STORE_FILE_BASE64: ${{ secrets.RELEASE_STORE_FILE_BASE64 }}
-          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
-          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
-          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
-        run: ./gradlew :app:verifyReleaseSigned --no-daemon --stacktrace
+          PRIMARY_STORE_FILE_BASE64: ${{ secrets.RELEASE_STORE_FILE_BASE64 }}
+          LEGACY_STORE_FILE_BASE64: ${{ secrets.STREAMBUDDY_KEYSTORE_BASE64 }}
+          PRIMARY_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          LEGACY_STORE_PASSWORD: ${{ secrets.STREAMBUDDY_KEYSTORE_PASS }}
+          PRIMARY_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          LEGACY_KEY_ALIAS: ${{ secrets.STREAMBUDDY_KEY_ALIAS }}
+          PRIMARY_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          LEGACY_KEY_PASSWORD: ${{ secrets.STREAMBUDDY_KEY_PASS }}
+        run: |
+          export RELEASE_STORE_FILE_BASE64="${PRIMARY_STORE_FILE_BASE64:-$LEGACY_STORE_FILE_BASE64}"
+          export RELEASE_STORE_PASSWORD="${PRIMARY_STORE_PASSWORD:-$LEGACY_STORE_PASSWORD}"
+          export RELEASE_KEY_ALIAS="${PRIMARY_KEY_ALIAS:-$LEGACY_KEY_ALIAS}"
+          export RELEASE_KEY_PASSWORD="${PRIMARY_KEY_PASSWORD:-$LEGACY_KEY_PASSWORD}"
+          ./gradlew :app:verifyReleaseSigned --no-daemon --stacktrace
 
       - name: Confirm the APK is installable
         run: |
@@ -63,7 +75,12 @@ jobs:
           echo "APK=$APK" >> "$GITHUB_ENV"
           # Prove it is signed, so it actually installs on a device. keytool ships
           # with the JDK we just configured, so this does not depend on SDK paths.
-          keytool -printcert -jarfile "$APK"
+          CERT_INFO="$(keytool -printcert -jarfile "$APK")"
+          echo "$CERT_INFO"
+          if [[ "${GITHUB_REF:-}" == refs/tags/v* ]] && echo "$CERT_INFO" | grep -q "CN=Android Debug"; then
+            echo "::error::Tagged release builds must not be signed with the Android Debug keystore."
+            exit 1
+          fi
 
       - name: Upload release APK artifact
         uses: actions/upload-artifact@v4

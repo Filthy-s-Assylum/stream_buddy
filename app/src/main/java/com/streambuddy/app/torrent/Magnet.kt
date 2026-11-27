@@ -53,9 +53,12 @@ object Magnet {
             if (part.isBlank()) return@mapNotNull null
             val index = part.indexOf('=')
             if (index < 0) null
-            else URLDecoder.decode(part.substring(0, index), "UTF-8") to
-                URLDecoder.decode(part.substring(index + 1), "UTF-8")
+            else decodeComponent(part.substring(0, index)) to
+                decodeComponent(part.substring(index + 1))
         }
+
+    private fun decodeComponent(raw: String): String =
+        runCatching { URLDecoder.decode(raw.replace("+", "%2B"), "UTF-8") }.getOrDefault(raw)
 
     /** btih is either 40 hex characters or 32 base32 characters. */
     private fun normalizeHash(raw: String): String {

@@ -6,6 +6,7 @@ import com.streambuddy.app.data.SettingsStore
 import com.streambuddy.app.net.VpnMonitor
 import com.streambuddy.app.net.VpnRequiredMessage
 import com.streambuddy.app.security.SecurityCenter
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -304,6 +305,7 @@ class TorrentManager(
                         info = info2,
                         files = files,
                         mainFile = main,
+                        offsets = offsets,
                         fileOffset = fileOffset,
                         pieceLength = pieceLength,
                         subtitles = subtitles,
@@ -341,11 +343,11 @@ class TorrentManager(
                     )
 
                     val probe = minOf(main.size - startByte, 6L * 1024L * 1024L).coerceAtLeast(1L)
-                    val ready = engine.awaitRange(
+                    val ready = engine.awaitRangeSuspending(
                         handle = handle,
                         pieceLength = pieceLength,
-                        start = startByte,
-                        endExclusive = startByte + probe,
+                        start = fileOffset + startByte,
+                        endExclusive = fileOffset + startByte + probe,
                         timeoutMs = FIRST_BUFFER_TIMEOUT_MS,
                     )
                     if (!ready) {
@@ -393,6 +395,7 @@ class TorrentManager(
                     )
                 } catch (throwable: Throwable) {
                     closeInternal(deleteFiles = true, stopService = true)
+                    if (throwable is CancellationException) throw throwable
                     val message = when (throwable) {
                         is TorrentException -> throwable.message ?: "Torrent failed"
                         else -> engine.lastError() ?: throwable.message ?: "Torrent failed"
@@ -512,33 +515,55 @@ class TorrentManager(
     )
 
     /**
-     * Create a .torrent from a user-owned file.
-     * Writes the .torrent to private app storage and returns the info hash and magnet output.
+     * Create a .torrent from a user-owned video file.
+     * Writes the .torrent to private app storage and returns a [CreatedTorrent]
+     * containing the .torrent bytes, info hash, suggested name, and saved file.
+     * Caller must ensure they own the content and have the right to create a torrent from it.
      */
     suspend fun createTorrentFile(
         sourceFile: File,
         label: String = "StreamBuddy",
         comment: String? = null,
     ): Result<CreatedTorrent> = withContext(Dispatchers.IO) {
+        if (!sourceFile.isFile || sourceFile.length() <= 0L) {
+            return@withContext Result.failure(
+                TorrentException("Source video file does not exist or is empty."),
+            )
+        }
         val extension = sourceFile.name.substringAfterLast('.', "").lowercase(Locale.US)
         if (extension !in setOf("mp4", "m4v", "mkv", "webm", "avi", "mov", "ts", "m2ts", "mts")) {
             return@withContext Result.failure(
-                TorrentException("Unsupported file type for torrent creation. Use video files only.")
+                TorrentException("Unsupported file type for torrent creation. Use video files only."),
             )
         }
 
-        val builder = TorrentBuilder()
-        builder.path(sourceFile)
-        builder.comment(label)
-        builder.creationDate(System.currentTimeMillis() / 1000L)
-        if (comment?.isNotBlank() == true) builder.comment(comment)
-        builder.setPrivate(true)
+        runCatching {
+            val builder = TorrentBuilder()
+            builder.path(sourceFile)
+            builder.comment(label)
+            builder.creationDate(System.currentTimeMillis() / 1000L)
+            if (comment?.isNotBlank() == true) builder.comment(comment)
+            builder.setPrivate(true)
 
-        val torrentBytes = builder.generate().entry().bencode()
-        val infoHash = TorrentInfo(torrentBytes).infoHash().toHex()
-        val torrentName = sourceFile.name.take(100)
+            val torrentBytes = builder.generate().entry().bencode()
+            val infoHash = TorrentInfo(torrentBytes).infoHash().toHex()
+            val torrentName = sourceFile.name.take(100)
+            val metaDir = File(torrentRoot, "meta").apply { mkdirs() }
+            val target = File(metaDir, "$infoHash.torrent")
+            val temporary = File(metaDir, "$infoHash.torrent.part")
+            temporary.writeBytes(torrentBytes)
+            if (!temporary.renameTo(target)) {
+                temporary.copyTo(target, overwrite = true)
+                temporary.delete()
+            }
 
-        Result.success(CreatedTorrent(torrentBytes = torrentBytes, infoHash = infoHash, torrentName = torrentName, file = sourceFile))
+            CreatedTorrent(
+                torrentBytes = torrentBytes,
+                infoHash = infoHash,
+                torrentName = torrentName,
+                file = target,
+            )
+        }
     }
 
     /** Bytes currently used by torrent data and metadata in app-private storage. */
@@ -561,7 +586,7 @@ class TorrentManager(
                 val status = engine.status(session.handle)
                 if (status != null) {
                     val settings = settingsStore.current()
-                    if (status.isFinished() && !settings.seedingEnabled && !status.isSeeding()) {
+                    if (status.isFinished() && !settings.seedingEnabled && status.isSeeding()) {
                         engine.pause(session.handle)
                     }
                     _state.value = TorrentUiState(
@@ -636,6 +661,7 @@ class TorrentManager(
         val info: TorrentInfo,
         val files: List<SafeTorrentFile>,
         val mainFile: SafeTorrentFile,
+        val offsets: LongArray,
         val fileOffset: Long,
         val pieceLength: Long,
         val subtitles: List<SafeTorrentFile>,
@@ -654,7 +680,13 @@ class TorrentManager(
                 size = mainFile.size,
                 contentType = contentTypeFor(mainFile.path),
                 readiness = RangeReadiness { start, end ->
-                    engine.awaitRange(handle, pieceLength, start, end, READ_TIMEOUT_MS)
+                    engine.awaitRange(
+                        handle,
+                        pieceLength,
+                        fileOffset + start,
+                        fileOffset + end,
+                        READ_TIMEOUT_MS,
+                    )
                 },
             )
         }
@@ -662,12 +694,19 @@ class TorrentManager(
         fun subtitleFile(index: Int): ServedFile? {
             val file = subtitles.getOrNull(index) ?: return null
             val path = file.safePath ?: return null
+            val subtitleOffset = offsets.getOrElse(file.index) { 0L }
             return ServedFile(
                 file = File(directory, path),
                 size = file.size,
-                contentType = "text/vtt; charset=utf-8",
+                contentType = subtitleContentTypeFor(file.path),
                 readiness = RangeReadiness { start, end ->
-                    engine.awaitRange(handle, pieceLength, start, end, READ_TIMEOUT_MS)
+                    engine.awaitRange(
+                        handle,
+                        pieceLength,
+                        subtitleOffset + start,
+                        subtitleOffset + end,
+                        READ_TIMEOUT_MS,
+                    )
                 },
             )
         }
@@ -708,20 +747,15 @@ class TorrentManager(
             }
         }
 
-        /**
-         * Create a .torrent from a user-owned video file.
-         * Writes the .torrent to private app storage and returns a [CreatedTorrent]
-         * containing the .torrent bytes, info hash, and suggested name.
-         * The .torrent is intended for loopback-only HTTP streaming via
-         * [PlayerEngine.openTorrentFile()].
-         * Caller must own the content and have the right to create a torrent from it.
-         */
+        fun subtitleContentTypeFor(path: String): String {
+            val extension = path.substringAfterLast('.', "").lowercase(Locale.US)
+            return when (extension) {
+                "vtt" -> "text/vtt; charset=utf-8"
+                "srt" -> "application/x-subrip; charset=utf-8"
+                "ass", "ssa" -> "text/x-ssa; charset=utf-8"
+                "ttml", "dfxp" -> "application/ttml+xml; charset=utf-8"
+                else -> "text/plain; charset=utf-8"
+            }
+        }
     }
-}
-
-// The handle does not exist yet. Upload is paused again by the first poll
-// if seeding is disabled, and the initial flags are SEQUENTIAL_DOWNLOAD.
-private fun LibtorrentEngine.setSeedingEnabledLater() {
-    // The handle does not exist yet. Upload is paused again by the first poll
-    // if seeding is disabled, and the initial flags are SEQUENTIAL_DOWNLOAD.
 }

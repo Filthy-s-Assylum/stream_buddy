@@ -30,7 +30,10 @@ class TunableLoadControl(
     private var minBufferUs: Long = minBufferMs.coerceAtLeast(2_000).toLong() * 1_000L
 
     @Volatile
-    private var maxBufferUs: Long = maxBufferMs.coerceAtLeast(6_000).toLong() * 1_000L
+    private var maxBufferUs: Long = maxOf(
+        minBufferMs.coerceAtLeast(2_000),
+        maxBufferMs.coerceAtLeast(6_000),
+    ).toLong() * 1_000L
 
     @Volatile
     private var playbackBufferUs: Long = PLAYBACK_BUFFER_MS * 1_000L
@@ -42,7 +45,6 @@ class TunableLoadControl(
     private var targetBufferBytes: Int = DEFAULT_TARGET_BYTES
 
     init {
-        require(maxBufferMs >= minBufferMs) { "max buffer must be >= min buffer" }
         allocator.setTargetBufferSize(targetBufferBytes)
     }
 

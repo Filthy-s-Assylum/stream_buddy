@@ -1,20 +1,24 @@
 package com.streambuddy.app.download
 
 import android.content.Context
-import android.os.Handler
-import android.os.Looper
+import android.net.Uri
 import androidx.annotation.OptIn
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
-import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.cache.NoOpCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.offline.Download
 import androidx.media3.exoplayer.offline.DownloadManager
 import androidx.media3.exoplayer.offline.DownloadRequest
 import androidx.media3.exoplayer.scheduler.Requirements
+import com.streambuddy.app.net.Http
+import com.streambuddy.app.net.NetworkGuard
 import java.io.File
 import java.security.MessageDigest
+import java.util.Locale
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 
@@ -32,13 +36,21 @@ object Downloads {
     private val executor: Executor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "sb-downloads").apply { isDaemon = true }
     }
-    private val mainExecutor = Executor { runnable -> Handler(Looper.getMainLooper()).post(runnable) }
+
+    @Volatile
+    private var dbProvider: StandaloneDatabaseProvider? = null
 
     @Volatile
     private var downloadCache: SimpleCache? = null
 
     @Volatile
     private var manager: DownloadManager? = null
+
+    @Synchronized
+    private fun databaseProvider(context: Context): StandaloneDatabaseProvider {
+        dbProvider?.let { return it }
+        return StandaloneDatabaseProvider(context.applicationContext).also { dbProvider = it }
+    }
 
     @Synchronized
     fun cache(context: Context): SimpleCache {
@@ -48,7 +60,7 @@ object Downloads {
         return SimpleCache(
             directory,
             NoOpCacheEvictor(),
-            StandaloneDatabaseProvider(context.applicationContext),
+            databaseProvider(context),
         ).also { downloadCache = it }
     }
 
@@ -57,7 +69,7 @@ object Downloads {
         manager?.let { return it }
         val created = DownloadManager(
             context.applicationContext,
-            StandaloneDatabaseProvider(context.applicationContext),
+            databaseProvider(context),
             cache(context),
             upstreamFactory(),
             executor,
@@ -69,16 +81,16 @@ object Downloads {
         return created
     }
 
-    fun upstreamFactory(): DefaultHttpDataSource.Factory = DefaultHttpDataSource.Factory()
+    fun upstreamFactory(): HttpDataSource.Factory = OkHttpDataSource.Factory(Http.mediaClient)
         .setUserAgent("StreamBuddy/1.0 (Android)")
-        .setConnectTimeoutMs(20_000)
-        .setReadTimeoutMs(30_000)
-        // Keep media redirects on the same scheme so an HTTPS source cannot be
-        // silently downgraded to cleartext by a third-party redirect.
-        .setAllowCrossProtocolRedirects(false)
 
     fun setWifiOnly(context: Context, wifiOnly: Boolean) {
         manager(context).requirements = requirements(wifiOnly)
+    }
+
+    fun isHttpUri(uri: String): Boolean {
+        val scheme = runCatching { Uri.parse(uri.trim()).scheme?.lowercase(Locale.US) }.getOrNull()
+        return scheme == "http" || scheme == "https"
     }
 
     fun enqueue(
@@ -87,8 +99,10 @@ object Downloads {
         mimeType: String,
         lastModified: Long? = null,
     ): String {
+        require(isHttpUri(uri)) { "Only http(s) links can be downloaded offline." }
+        NetworkGuard.check()
         val id = downloadId(uri)
-        val request = DownloadRequest.Builder(id, android.net.Uri.parse(uri))
+        val request = DownloadRequest.Builder(id, Uri.parse(uri))
             .setMimeType(mimeType)
             .setCustomCacheKey(uri)
             .setData(if (lastModified != null) lastModified.toString().toByteArray() else null)
@@ -127,10 +141,21 @@ object Downloads {
         return digest.take(12).joinToString("") { "%02x".format(it.toInt() and 0xff) }
     }
 
-    fun mimeFor(kind: String): String = when (kind.uppercase()) {
-        "HLS" -> "application/x-mpegURL"
-        "DASH" -> "application/dash+xml"
-        "MP4" -> "video/mp4"
+    fun mimeForUri(uri: String): String {
+        val path = runCatching { Uri.parse(uri).path }.getOrNull().orEmpty().lowercase(Locale.US)
+        return when {
+            path.endsWith(".m3u8") || path.contains(".m3u8") -> MimeTypes.APPLICATION_M3U8
+            path.endsWith(".mpd") || path.contains(".mpd") -> MimeTypes.APPLICATION_MPD
+            else -> mimeFor(path.substringAfterLast('.', "mp4"))
+        }
+    }
+
+    fun mimeFor(kind: String): String = when (kind.trim().uppercase(Locale.US)) {
+        "HLS", "M3U8", "M3U" -> MimeTypes.APPLICATION_M3U8
+        "DASH", "MPD" -> MimeTypes.APPLICATION_MPD
+        "MP4", "M4V", "MOV" -> MimeTypes.VIDEO_MP4
+        "MKV" -> MimeTypes.VIDEO_MATROSKA
+        "WEBM" -> MimeTypes.VIDEO_WEBM
         else -> "application/octet-stream"
     }
 
@@ -146,5 +171,6 @@ object Downloads {
         manager = null
         runCatching { downloadCache?.release() }
         downloadCache = null
+        dbProvider = null
     }
 }

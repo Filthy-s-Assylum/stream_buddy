@@ -62,9 +62,10 @@ class PageLinkScraperTest {
     @Test
     fun `classifies torrent paths without an extension`() {
         val links = PageLinkScraper.classify(
-            listOf("https://example.test/torrent/456", "https://example.test/download.php?id=9"),
+            listOf("https://example.test/torrent/456", "https://example.test/download/torrent?id=9"),
             base,
         )
+        assertEquals(2, links.size)
         assertTrue(links.all { it.kind == ScrapedKind.TORRENT })
     }
 

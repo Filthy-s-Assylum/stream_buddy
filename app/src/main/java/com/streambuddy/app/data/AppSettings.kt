@@ -1,3 +1,5 @@
+package com.streambuddy.app.data
+
 /**
  * Centralized secrets management.
  *

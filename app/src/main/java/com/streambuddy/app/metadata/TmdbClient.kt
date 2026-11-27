@@ -10,6 +10,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.util.Locale
 import java.util.concurrent.TimeUnit
@@ -162,14 +163,28 @@ class TmdbClient(
             .header("User-Agent", "StreamBuddy/1.0 (Android)")
             .build()
         client.newCall(request).execute().use { response ->
+            if (!response.request.url.host.equals("api.themoviedb.org", ignoreCase = true)) {
+                throw IOException("Unexpected TMDB host")
+            }
             if (!response.isSuccessful) {
                 throw IOException("TMDB HTTP ${response.code}")
             }
             val body = response.body ?: throw IOException("TMDB returned an empty response")
             val length = body.contentLength()
             if (length > MAX_RESPONSE_BYTES) throw IOException("Metadata response is too large")
-            val text = body.string()
-            if (text.length > MAX_RESPONSE_BYTES) throw IOException("Metadata response is too large")
+            val text = body.byteStream().use { input ->
+                val buffer = ByteArray(16 * 1024)
+                val out = ByteArrayOutputStream()
+                var total = 0
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read <= 0) break
+                    total += read
+                    if (total > MAX_RESPONSE_BYTES) throw IOException("Metadata response is too large")
+                    out.write(buffer, 0, read)
+                }
+                out.toString(Charsets.UTF_8.name())
+            }
             JSONObject(text)
         }
     }
@@ -207,6 +222,8 @@ class TmdbClient(
             .connectTimeout(12, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
             .callTimeout(20, TimeUnit.SECONDS)
+            .followRedirects(false)
+            .followSslRedirects(false)
             .retryOnConnectionFailure(true)
             .addInterceptor(com.streambuddy.app.net.NetworkGuard.interceptor())
             .build()
