@@ -168,7 +168,7 @@ class TorrentDownloadManager(
             }
             val status = engine.status(handle)
             val done = status?.totalWantedDone() ?: 0L
-            val rate = status?.downloadRate() ?: 0L
+            val rate = status?.downloadRate()?.toLong() ?: 0L
             val peers = status?.numPeers() ?: 0
             _state.value = _state.value.copy(
                 progress = if (main.size > 0) (done.toDouble() / main.size).coerceIn(0.0, 1.0) else 0.0,
