@@ -8,10 +8,13 @@ import com.streambuddy.app.ai.PrefetchPredictor
 import com.streambuddy.app.ai.Prediction
 import com.streambuddy.app.ai.WatchEvent
 import com.streambuddy.app.data.AppDb
+import com.streambuddy.app.data.LibraryItem
 import com.streambuddy.app.data.PredictorRepository
 import com.streambuddy.app.data.SettingsRepository
+import com.streambuddy.app.data.SettingsStore
 import com.streambuddy.app.data.StreamEntity
 import com.streambuddy.app.data.WatchEntity
+import com.streambuddy.app.download.Downloads
 import com.streambuddy.app.stream.CacheState
 import com.streambuddy.app.stream.StreamKind
 
@@ -32,14 +35,33 @@ object SmartPrefetch {
 
     /** Ranks the current queue. Empty when smart pre-caching is switched off. */
     suspend fun rankQueue(context: Context): List<Prediction> {
-        if (!SettingsRepository.get(context).settings.value.smartPrefetch) return emptyList()
+        if (!isSmartPrefetchEnabled(context)) return emptyList()
         val streams = AppDb.get(context).streams().allOnce()
             .filter { it.streamKind != StreamKind.TORRENT }
         if (streams.isEmpty()) return emptyList()
+        return rankCandidates(context, streams.map { it.toCandidate() })
+    }
+
+    /** Ranks library items with cacheable HTTP/HLS sources using the on-device predictor. */
+    suspend fun rankLibrary(context: Context, items: List<LibraryItem>): List<Prediction> {
+        if (!isSmartPrefetchEnabled(context)) return emptyList()
+        val candidates = items
+            .filter { it.hasSource && Downloads.isHttpUri(it.sourceUri.orEmpty()) }
+            .map { Candidate(streamId = it.id, title = it.title, addedAtMs = it.addedAt) }
+        if (candidates.isEmpty()) return emptyList()
+        return rankCandidates(context, candidates)
+    }
+
+    suspend fun rankCandidates(context: Context, candidates: List<Candidate>): List<Prediction> {
+        if (candidates.isEmpty() || !isSmartPrefetchEnabled(context)) return emptyList()
         val history = history(context)
         val model = PredictorRepository.get(context).state.value.model
-        return PrefetchPredictor.rank(streams.map { it.toCandidate() }, history, model)
+        return PrefetchPredictor.rank(candidates, history, model)
     }
+
+    private fun isSmartPrefetchEnabled(context: Context): Boolean =
+        SettingsStore.get(context).current().smartPrefetch ||
+            SettingsRepository.get(context).settings.value.smartPrefetch
 
     /**
      * The streams worth pre-caching right now, best first, each with its own depth derived from

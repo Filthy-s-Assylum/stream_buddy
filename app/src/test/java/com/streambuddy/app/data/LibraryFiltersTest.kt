@@ -91,6 +91,17 @@ class LibraryFiltersTest {
     }
 
     @Test
+    fun `filters by onlyWithSource`() {
+        val items = listOf(
+            item(1, "With URL"),
+            item(2, "Missing Source").copy(sourceUri = null),
+            item(3, "Blank Source").copy(sourceUri = "   "),
+        )
+        val filtered = LibraryFilters.apply(items, LibraryQuery(onlyWithSource = true))
+        assertEquals(listOf(1L), filtered.map { it.id })
+    }
+
+    @Test
     fun `collects distinct sorted genres and networks`() {
         val items = listOf(
             item(1, "One", genres = listOf("Drama", "Action"), network = "HBO"),

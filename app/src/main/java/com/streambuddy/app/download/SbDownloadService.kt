@@ -73,5 +73,14 @@ class SbDownloadService : DownloadService(
         fun sendResumeDownloads(context: android.content.Context, foreground: Boolean) {
             DownloadService.sendResumeDownloads(context, SbDownloadService::class.java, foreground)
         }
+
+        fun sendSetStopReason(
+            context: android.content.Context,
+            id: String,
+            stopReason: Int,
+            foreground: Boolean,
+        ) {
+            DownloadService.sendSetStopReason(context, SbDownloadService::class.java, id, stopReason, foreground)
+        }
     }
 }

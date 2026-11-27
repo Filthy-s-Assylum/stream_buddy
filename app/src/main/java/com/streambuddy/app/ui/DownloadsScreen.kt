@@ -1,7 +1,6 @@
 package com.streambuddy.app.ui
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -22,6 +21,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -30,6 +30,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -42,10 +43,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.offline.Download
+import com.streambuddy.app.ai.Prediction
 import com.streambuddy.app.cache.CacheUsage
+import com.streambuddy.app.cache.LibraryPreCacheState
 import com.streambuddy.app.cache.PlaybackCache
 import com.streambuddy.app.core.Fmt
+import com.streambuddy.app.data.LibraryItem
 import com.streambuddy.app.download.Downloads
+import com.streambuddy.app.stream.CacheState
 import com.streambuddy.app.torrent.TorrentUiState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -57,7 +62,7 @@ import kotlinx.coroutines.withContext
  * keeps, because they have different lifetimes:
  *
  *  - offline downloads: kept until the user deletes them;
- *  - playback cache: evictable, safe to clear at any time;
+ *  - playback cache (including pre-cached segments): evictable, safe to clear;
  *  - torrent scratch: temporary pieces, deleted when playback stops.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -68,7 +73,15 @@ fun DownloadsScreen(
     torrentStorageBytes: Long,
     cacheMaxBytes: Long,
     playerActive: Boolean,
+    vpnBlocked: Boolean,
+    smartPrefetchEnabled: Boolean,
+    libraryItems: List<LibraryItem>,
+    preCacheStates: Map<Long, LibraryPreCacheState>,
+    predictions: Map<Long, Prediction>,
     onClearTorrentStorage: () -> Unit,
+    onClearPreCacheStates: () -> Unit,
+    onCancelPreCache: (Long) -> Unit,
+    onRunSmartPrefetch: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -77,7 +90,8 @@ fun DownloadsScreen(
     var cacheUsage by remember { mutableStateOf(CacheUsage(0, 0, cacheMaxBytes)) }
     var confirmCache by remember { mutableStateOf(false) }
     var confirmTorrent by remember { mutableStateOf(false) }
-    var refreshTick by remember { mutableStateOf(0) }
+    var actionError by remember { mutableStateOf<String?>(null) }
+    var refreshTick by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(refreshTick, torrent.phase, cacheMaxBytes) {
         while (true) {
@@ -88,6 +102,17 @@ fun DownloadsScreen(
             cacheUsage = usage
             delay(2_000)
         }
+    }
+
+    val titlesById = remember(libraryItems) { libraryItems.associateBy { it.id } }
+    val preCacheEntries = remember(preCacheStates, titlesById) {
+        preCacheStates.values
+            .sortedByDescending { it.state == CacheState.CACHING }
+    }
+    val topPredictions = remember(predictions, titlesById) {
+        predictions.values
+            .sortedByDescending { it.probability }
+            .take(3)
     }
 
     Scaffold(
@@ -106,6 +131,23 @@ fun DownloadsScreen(
             modifier = Modifier.fillMaxSize().padding(padding),
             contentPadding = PaddingValues(bottom = 32.dp),
         ) {
+            actionError?.let { message ->
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = message,
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        TextButton(onClick = { actionError = null }) { Text("Dismiss") }
+                    }
+                }
+            }
+
             item {
                 SectionTitle("Playback cache")
                 Card(
@@ -140,6 +182,62 @@ fun DownloadsScreen(
                 }
             }
 
+            if (smartPrefetchEnabled || preCacheEntries.isNotEmpty()) {
+                item {
+                    Spacer(Modifier.height(8.dp))
+                    SectionTitle(
+                        text = "Pre-cache & smart picks",
+                        trailing = if (smartPrefetchEnabled) {
+                            {
+                                TextButton(
+                                    onClick = onRunSmartPrefetch,
+                                    enabled = !vpnBlocked,
+                                ) { Text("Run now") }
+                            }
+                        } else {
+                            null
+                        },
+                    )
+                }
+
+                if (preCacheEntries.isEmpty() && topPredictions.isNotEmpty()) {
+                    item {
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        ) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    "Top predicted next plays",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                                topPredictions.forEach { pred ->
+                                    val reason = pred.reasons.firstOrNull()?.detail
+                                        ?: "${(pred.probability * 100).toInt()}% score"
+                                    Text(
+                                        "${pred.candidate.title} · $reason",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                items(preCacheEntries, key = { "pc-${it.itemId}" }) { entry ->
+                    val title = titlesById[entry.itemId]?.title ?: "Library item #${entry.itemId}"
+                    PreCacheRow(
+                        title = title,
+                        state = entry,
+                        onCancel = { onCancelPreCache(entry.itemId) },
+                    )
+                }
+            }
+
             item {
                 Spacer(Modifier.height(8.dp))
                 SectionTitle("Offline downloads")
@@ -159,6 +257,21 @@ fun DownloadsScreen(
                 items(downloads, key = { it.request.id }) { download ->
                     DownloadRow(
                         download = download,
+                        vpnBlocked = vpnBlocked,
+                        onPause = {
+                            Downloads.pause(context, download.request.id)
+                            refreshTick++
+                        },
+                        onResume = {
+                            runCatching { Downloads.resume(context, download.request.id) }
+                                .onFailure { actionError = it.message }
+                            refreshTick++
+                        },
+                        onRetry = {
+                            runCatching { Downloads.retry(context, download) }
+                                .onFailure { actionError = it.message }
+                            refreshTick++
+                        },
                         onRemove = {
                             Downloads.remove(context, download.request.id)
                             refreshTick++
@@ -220,6 +333,7 @@ fun DownloadsScreen(
                         withContext(Dispatchers.IO) {
                             runCatching { PlaybackCache.clear(context) }
                         }
+                        onClearPreCacheStates()
                         refreshTick++
                     }
                 }) { Text("Clear") }
@@ -244,9 +358,81 @@ fun DownloadsScreen(
     }
 }
 
+@Composable
+private fun PreCacheRow(
+    title: String,
+    state: LibraryPreCacheState,
+    onCancel: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    StatusPill(state.state)
+                }
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = state.error ?: buildString {
+                        if (state.cachedBytes > 0L) append(Fmt.bytes(state.cachedBytes)).append(" cached")
+                        else append(state.state.label)
+                        if (state.totalDurationMs > 0L) {
+                            append(" · ")
+                            append(Fmt.duration(state.cachedDurationMs / 1000.0))
+                            append(" / ")
+                            append(Fmt.duration(state.totalDurationMs / 1000.0))
+                        }
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (state.state == CacheState.FAILED) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (state.state == CacheState.CACHING) {
+                    Spacer(Modifier.height(5.dp))
+                    ProgressLine(state.progressFraction)
+                }
+            }
+            if (state.state == CacheState.CACHING) {
+                OutlinedButton(
+                    onClick = onCancel,
+                    modifier = Modifier.padding(start = 8.dp),
+                ) { Text("Cancel") }
+            }
+        }
+    }
+}
+
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
-private fun DownloadRow(download: Download, onRemove: () -> Unit) {
+private fun DownloadRow(
+    download: Download,
+    vpnBlocked: Boolean,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onRetry: () -> Unit,
+    onRemove: () -> Unit,
+) {
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -285,7 +471,26 @@ private fun DownloadRow(download: Download, onRemove: () -> Unit) {
                     ProgressLine(download.percentDownloaded / 100.0)
                 }
             }
-            Box(Modifier.padding(start = 8.dp)) {
+            Row(
+                modifier = Modifier.padding(start = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                when (download.state) {
+                    Download.STATE_DOWNLOADING,
+                    Download.STATE_QUEUED,
+                    Download.STATE_RESTARTING,
+                    -> TextButton(onClick = onPause) { Text("Pause") }
+
+                    Download.STATE_STOPPED -> TextButton(
+                        onClick = onResume,
+                        enabled = !vpnBlocked,
+                    ) { Text("Resume") }
+
+                    Download.STATE_FAILED -> TextButton(
+                        onClick = onRetry,
+                        enabled = !vpnBlocked,
+                    ) { Text("Retry") }
+                }
                 IconButton(onClick = onRemove) {
                     Icon(Icons.Filled.Delete, contentDescription = "Remove download")
                 }

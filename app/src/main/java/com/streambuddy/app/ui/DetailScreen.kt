@@ -1,9 +1,12 @@
 package com.streambuddy.app.ui
 
 import android.content.Intent
+import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,7 +39,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -49,6 +54,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.offline.Download
+import com.streambuddy.app.ai.Prediction
+import com.streambuddy.app.cache.LibraryPreCacheState
 import com.streambuddy.app.core.Fmt
 import com.streambuddy.app.data.LibraryItem
 import com.streambuddy.app.data.LibraryStatus
@@ -59,24 +68,35 @@ import com.streambuddy.app.metadata.WatchOption
 import com.streambuddy.app.net.NetworkGuard
 import com.streambuddy.app.net.VpnRequiredMessage
 import com.streambuddy.app.playback.PlayerUiState
+import com.streambuddy.app.stream.CacheState
 import com.streambuddy.app.torrent.Magnet
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 fun DetailScreen(
     item: LibraryItem?,
     playerState: PlayerUiState,
     motn: MotnRepository,
     vpnBlocked: Boolean,
+    preCacheState: LibraryPreCacheState? = null,
+    prediction: Prediction? = null,
+    prefetchMinutes: Int = 5,
     onBack: () -> Unit,
     onPlay: (LibraryItem, Long?) -> Unit,
     onAttachSource: (LibraryItem, String, String?) -> Unit,
+    onAttachTorrentUri: (LibraryItem, Uri, (String?) -> Unit) -> Unit = { _, _, cb -> cb(null) },
     onClearSource: (LibraryItem) -> Unit,
     onSetWatchlist: (LibraryItem, Boolean) -> Unit,
     onSetWatched: (LibraryItem, Boolean) -> Unit,
     onDelete: (LibraryItem) -> Unit,
     onDownload: (LibraryItem) -> Unit,
+    onPreCache: (LibraryItem) -> Unit = {},
+    onCancelPreCache: (Long) -> Unit = {},
     onOpenPlayer: () -> Unit,
     onWatchInBrowser: (String) -> Unit,
 ) {
@@ -95,6 +115,22 @@ fun DetailScreen(
     var watchOptions by remember(item.id) { mutableStateOf<List<WatchOption>?>(null) }
     var watchLoading by remember(item.id) { mutableStateOf(false) }
     var watchError by remember(item.id) { mutableStateOf<String?>(null) }
+    var download by remember(item.id, item.sourceUri) { mutableStateOf<Download?>(null) }
+    var downloadTick by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(item.sourceUri, downloadTick) {
+        val uri = item.sourceUri
+        if (uri.isNullOrBlank() || !Downloads.isHttpUri(uri)) {
+            download = null
+            return@LaunchedEffect
+        }
+        while (true) {
+            download = withContext(Dispatchers.IO) {
+                Downloads.snapshot(context).firstOrNull { it.request.uri.toString() == uri }
+            }
+            delay(1_500)
+        }
+    }
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -104,7 +140,20 @@ fun DetailScreen(
                     Intent.FLAG_GRANT_READ_URI_PERMISSION,
                 )
             }
-            onAttachSource(item, uri.toString(), uri.lastPathSegment?.substringAfterLast('/'))
+            val displayName = runCatching {
+                context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                    if (c.moveToFirst()) c.getString(0) else null
+                }
+            }.getOrNull() ?: uri.lastPathSegment?.substringAfterLast('/')
+            onAttachSource(item, uri.toString(), displayName)
+        }
+    }
+
+    val torrentFilePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            onAttachTorrentUri(item, uri) { err ->
+                attachError = err
+            }
         }
     }
 
@@ -365,29 +414,127 @@ fun DetailScreen(
                         )
                     }
                     Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         FilledTonalButton(onClick = { attachOpen = true }) { Text("Change source") }
                         TextButton(onClick = { onClearSource(item) }) { Text("Remove source") }
                         if (Downloads.isHttpUri(item.sourceUri.orEmpty())) {
-                            TextButton(
-                                onClick = { onDownload(item) },
-                                enabled = !vpnBlocked,
-                            ) { Text("Download first") }
+                            val currentDownload = download
+                            when (currentDownload?.state) {
+                                null -> TextButton(
+                                    onClick = {
+                                        onDownload(item)
+                                        downloadTick++
+                                    },
+                                    enabled = !vpnBlocked,
+                                ) { Text("Download first") }
+
+                                Download.STATE_DOWNLOADING,
+                                Download.STATE_QUEUED,
+                                Download.STATE_RESTARTING,
+                                -> TextButton(onClick = {
+                                    Downloads.pause(context, currentDownload.request.id)
+                                    downloadTick++
+                                }) {
+                                    val pct = currentDownload.percentDownloaded.takeIf { it >= 0f }?.toInt()
+                                    Text(if (pct != null) "Pause ($pct%)" else "Pause download")
+                                }
+
+                                Download.STATE_STOPPED -> TextButton(
+                                    onClick = {
+                                        runCatching { Downloads.resume(context, currentDownload.request.id) }
+                                        downloadTick++
+                                    },
+                                    enabled = !vpnBlocked,
+                                ) { Text("Resume download") }
+
+                                Download.STATE_FAILED -> TextButton(
+                                    onClick = {
+                                        runCatching { Downloads.retry(context, currentDownload) }
+                                        downloadTick++
+                                    },
+                                    enabled = !vpnBlocked,
+                                ) { Text("Retry download") }
+
+                                Download.STATE_COMPLETED -> TextButton(
+                                    onClick = {
+                                        Downloads.remove(context, currentDownload.request.id)
+                                        downloadTick++
+                                    },
+                                ) { Text("Ready offline · Remove") }
+
+                                else -> Unit
+                            }
+
+                            when (preCacheState?.state) {
+                                CacheState.CACHING -> OutlinedButton(onClick = { onCancelPreCache(item.id) }) {
+                                    Text("Cancel pre-cache")
+                                }
+                                CacheState.READY -> OutlinedButton(
+                                    onClick = { onPreCache(item) },
+                                    enabled = !vpnBlocked,
+                                ) { Text("Pre-cached (${Fmt.bytes(preCacheState.cachedBytes)})") }
+                                else -> OutlinedButton(
+                                    onClick = { onPreCache(item) },
+                                    enabled = !vpnBlocked,
+                                ) { Text("Pre-cache (${prefetchMinutes}m)") }
+                            }
                         }
+                    }
+                    if (preCacheState != null) {
+                        Spacer(Modifier.height(6.dp))
+                        if (preCacheState.state == CacheState.CACHING) {
+                            ProgressLine(preCacheState.progressFraction)
+                            Text(
+                                text = "Pre-caching ${Fmt.bytes(preCacheState.cachedBytes)}…",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else if (preCacheState.error != null) {
+                            Text(
+                                text = preCacheState.error,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (preCacheState.state == CacheState.FAILED) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                        }
+                    }
+                    if (prediction != null && prediction.reasons.isNotEmpty()) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = "Smart pre-cache: ${prediction.reasons.joinToString(" · ") { it.detail }}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
                     }
                 } else {
                     Text(
-                        text = "No playable source attached. Add a magnet you are authorised to use, a direct https " +
-                            "media link you control, or a local video from this device.",
+                        text = "No playable source attached. Add a magnet you are authorised to use, a .torrent file, " +
+                            "a direct https media link you control, or a local video from this device.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
                         Button(onClick = { attachOpen = true }) { Text("Attach magnet or link") }
+                        OutlinedButton(onClick = { torrentFilePicker.launch(arrayOf("application/x-bittorrent", "*/*")) }) {
+                            Text("Import .torrent")
+                        }
                         OutlinedButton(onClick = { filePicker.launch(arrayOf("video/*", "audio/*")) }) {
                             Text("Pick a file")
                         }
+                    }
+                    attachError?.let { err ->
+                        Spacer(Modifier.height(6.dp))
+                        Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                     }
                 }
 
@@ -472,6 +619,10 @@ fun DetailScreen(
             },
             dismissButton = {
                 Row {
+                    TextButton(onClick = {
+                        attachOpen = false
+                        torrentFilePicker.launch(arrayOf("application/x-bittorrent", "*/*"))
+                    }) { Text(".torrent") }
                     TextButton(onClick = { filePicker.launch(arrayOf("video/*", "audio/*")) }) {
                         Text("Pick file")
                     }

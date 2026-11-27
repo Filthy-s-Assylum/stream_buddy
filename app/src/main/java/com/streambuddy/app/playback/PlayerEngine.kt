@@ -1,8 +1,12 @@
 package com.streambuddy.app.playback
 
+import android.app.PendingIntent
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import androidx.annotation.OptIn
+import androidx.core.content.ContextCompat
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -23,8 +27,15 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.LoadEventInfo
 import androidx.media3.exoplayer.source.MediaLoadData
 import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.session.MediaController
 import androidx.media3.session.MediaSession
+import androidx.media3.session.SessionToken
+import com.google.common.util.concurrent.ListenableFuture
+import com.streambuddy.app.MainActivity
+import com.streambuddy.app.ai.SeriesMatcher
+import com.streambuddy.app.ai.WatchEvent
 import com.streambuddy.app.cache.PlaybackCache
+import com.streambuddy.app.cache.SmartPrefetch
 import com.streambuddy.app.data.LibraryItem
 import com.streambuddy.app.data.LibraryRepository
 import com.streambuddy.app.data.SettingsStore
@@ -45,16 +56,23 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.io.File
-import java.util.Locale
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.util.Locale
 
 /** A subtitle track that can be shown in the player menu. */
 data class SubtitleOption(
     val index: Int,
     val label: String,
     val url: String,
+)
+
+/** An audio track reported by ExoPlayer for the active stream. */
+data class AudioTrackOption(
+    val index: Int,
+    val label: String,
 )
 
 data class PlayerUiState(
@@ -71,9 +89,15 @@ data class PlayerUiState(
     val error: String? = null,
     val subtitles: List<SubtitleOption> = emptyList(),
     val selectedSubtitle: Int = -1,
+    val audioTracks: List<AudioTrackOption> = emptyList(),
+    val selectedAudioTrack: Int = -1,
+    val playbackSpeed: Float = 1.0f,
     val videoWidth: Int = 0,
     val videoHeight: Int = 0,
     val isTorrent: Boolean = false,
+    val nextEpisodeId: Long? = null,
+    val nextEpisodeTitle: String? = null,
+    val autoplayCountdownSeconds: Int? = null,
 )
 
 /**
@@ -127,7 +151,22 @@ class PlayerEngine(
             setHandleAudioBecomingNoisy(true)
         }
 
-    val session: MediaSession = MediaSession.Builder(context, player).build()
+    val session: MediaSession = MediaSession.Builder(context, player)
+        .apply {
+            runCatching {
+                val intent = Intent(context, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                }
+                val pendingIntent = PendingIntent.getActivity(
+                    context,
+                    0,
+                    intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+                setSessionActivity(pendingIntent)
+            }
+        }
+        .build()
 
     private val _state = MutableStateFlow(PlayerUiState())
     val state: StateFlow<PlayerUiState> = _state.asStateFlow()
@@ -137,11 +176,16 @@ class PlayerEngine(
 
     private val analytics = PlaybackAnalytics()
 
+    private var controllerFuture: ListenableFuture<MediaController>? = null
     private var playJob: Job? = null
     private var tickJob: Job? = null
+    private var autoplayJob: Job? = null
     private var active: Active? = null
     private var textGroups: List<Tracks.Group> = emptyList()
+    private var audioGroups: List<Tracks.Group> = emptyList()
     private var pendingSubtitles: List<SubtitleOption> = emptyList()
+    private var autoSelectedSubtitlesForItem = false
+    private var userClearedSubtitles = false
     private var appliedCap: Int? = null
     private var appliedMinBuffer = -1
     private var appliedMaxBuffer = -1
@@ -153,6 +197,8 @@ class PlayerEngine(
         val kind: StreamKind,
         val requiresVpn: Boolean,
         val startedAt: Long,
+        val initialStartMs: Long,
+        var watchRecorded: Boolean = false,
     )
 
     private val playerListener = object : Player.Listener {
@@ -172,6 +218,8 @@ class PlayerEngine(
             if (playbackState == Player.STATE_ENDED) {
                 analytics.stallEnded()
                 saveProgress(completed = true)
+                active?.let { recordWatchEvent(it, completed = true) }
+                maybeStartAutoplayCountdown()
             }
             _state.value = _state.value.copy(
                 preparing = playbackState == Player.STATE_BUFFERING && !player.isPlaying,
@@ -202,23 +250,48 @@ class PlayerEngine(
             textGroups = tracks.groups.filter {
                 it.type == C.TRACK_TYPE_TEXT && it.length > 0
             }
-            val derived = if (pendingSubtitles.isNotEmpty()) {
+            val derived = if (pendingSubtitles.isNotEmpty() && textGroups.size == pendingSubtitles.size) {
                 pendingSubtitles
             } else {
                 textGroups.mapIndexed { index, group ->
                     SubtitleOption(
                         index = index,
                         label = subtitleLabel(group),
-                        url = "",
+                        url = pendingSubtitles.getOrNull(index)?.url.orEmpty(),
                     )
                 }
             }
-            val selected = if (_state.value.selectedSubtitle in derived.indices) {
+            var selected = if (_state.value.selectedSubtitle in derived.indices) {
                 _state.value.selectedSubtitle
             } else {
                 -1
             }
-            _state.value = _state.value.copy(subtitles = derived, selectedSubtitle = selected)
+            if (!autoSelectedSubtitlesForItem && !userClearedSubtitles && derived.isNotEmpty()) {
+                val preferred = settingsStore.current().preferredSubtitleLanguage.trim()
+                if (preferred.isNotEmpty()) {
+                    val matchIndex = findPreferredSubtitleIndex(preferred, textGroups, derived)
+                    if (matchIndex >= 0) {
+                        autoSelectedSubtitlesForItem = true
+                        applySubtitleOverride(matchIndex)
+                        selected = matchIndex
+                    }
+                }
+            }
+
+            audioGroups = tracks.groups.filter {
+                it.type == C.TRACK_TYPE_AUDIO && it.length > 0
+            }
+            val audioOptions = audioGroups.mapIndexed { index, group ->
+                AudioTrackOption(index = index, label = audioLabel(group, index))
+            }
+            val selectedAudio = audioGroups.indexOfFirst { it.isSelected }
+
+            _state.value = _state.value.copy(
+                subtitles = derived,
+                selectedSubtitle = selected,
+                audioTracks = audioOptions,
+                selectedAudioTrack = selectedAudio,
+            )
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -311,6 +384,8 @@ class PlayerEngine(
         }
 
         playJob?.cancel()
+        autoplayJob?.cancel()
+        autoplayJob = null
         val settings = settingsStore.current()
         val isMagnet = uri.startsWith("magnet:", ignoreCase = true)
         val torrentFile = if (uri.startsWith(TORRENT_FILE_SCHEME, ignoreCase = true)) {
@@ -334,8 +409,8 @@ class PlayerEngine(
             return
         }
 
-        // Persist progress of whatever was playing before switching titles.
-        saveProgress(completed = false)
+        // Persist progress, watch history, and clean up any previous session before switching titles.
+        cleanupPreviousSessionBeforeSwitch(switchingToTorrent = isMagnet || isTorrentFile)
 
         val startMs = (startOverrideMs ?: item.progressMs).coerceAtLeast(0L)
         val fraction = if (item.durationMs > 0) {
@@ -351,6 +426,7 @@ class PlayerEngine(
             preparing = true,
             positionMs = startMs,
             durationMs = item.durationMs,
+            playbackSpeed = _state.value.playbackSpeed,
         )
 
         playJob = scope.launch {
@@ -392,6 +468,46 @@ class PlayerEngine(
         }
     }
 
+    /** Switches to another playable file inside the active multi-file torrent. */
+    fun switchTorrentFile(fileIndex: Int) {
+        val session = active ?: return
+        if (session.kind != StreamKind.TORRENT) return
+        val settings = settingsStore.current()
+        if (settings.requireVpnForNetwork && !vpnMonitor.isActive()) {
+            _state.value = _state.value.copy(error = VpnRequiredMessage.playback)
+            return
+        }
+        playJob?.cancel()
+        autoplayJob?.cancel()
+        autoplayJob = null
+        _state.value = _state.value.copy(
+            preparing = true,
+            ended = false,
+            error = null,
+            autoplayCountdownSeconds = null,
+        )
+        playJob = scope.launch {
+            val open = torrentManager.selectFile(fileIndex).getOrElse { error ->
+                _state.value = _state.value.copy(
+                    preparing = false,
+                    error = error.message ?: "Could not switch torrent file.",
+                )
+                return@launch
+            }
+            startPlayback(
+                item = session.item,
+                kind = StreamKind.TORRENT,
+                uri = open.mediaUrl,
+                subtitles = open.subtitles.map { subtitle ->
+                    SubtitleOption(subtitle.index, subtitle.label, subtitle.url)
+                },
+                startMs = 0L,
+                requiresVpn = true,
+                sourceLabelOverride = open.fileName,
+            )
+        }
+    }
+
     private fun startPlayback(
         item: LibraryItem,
         kind: StreamKind,
@@ -399,15 +515,23 @@ class PlayerEngine(
         subtitles: List<SubtitleOption>,
         startMs: Long,
         requiresVpn: Boolean,
+        sourceLabelOverride: String? = null,
     ) {
+        ensureSessionServiceConnected()
+        autoplayJob?.cancel()
+        autoplayJob = null
         active = Active(
             item = item,
             kind = kind,
             requiresVpn = requiresVpn,
             startedAt = System.currentTimeMillis(),
+            initialStartMs = startMs,
         )
         pendingSubtitles = subtitles
         textGroups = emptyList()
+        audioGroups = emptyList()
+        autoSelectedSubtitlesForItem = false
+        userClearedSubtitles = false
         appliedCap = null
         analytics.reset()
         optimizer.setSession(item.id)
@@ -418,6 +542,7 @@ class PlayerEngine(
 
         val source = mediaSourceFor(kind, uri, item, subtitles, downloaded)
         player.setMediaSource(source, startMs.coerceAtLeast(0L))
+        player.setPlaybackSpeed(_state.value.playbackSpeed)
         player.prepare()
         player.playWhenReady = true
 
@@ -425,16 +550,26 @@ class PlayerEngine(
             itemId = item.id,
             title = item.title,
             kind = kind,
-            sourceLabel = item.sourceLabel.orEmpty(),
+            sourceLabel = sourceLabelOverride ?: item.sourceLabel.orEmpty(),
             preparing = true,
             playing = true,
             buffering = true,
+            ended = false,
             error = null,
             subtitles = subtitles,
             selectedSubtitle = -1,
+            audioTracks = emptyList(),
+            selectedAudioTrack = -1,
             isTorrent = kind.isTorrent,
             positionMs = startMs,
+            nextEpisodeId = null,
+            nextEpisodeTitle = null,
+            autoplayCountdownSeconds = null,
         )
+
+        scope.launch(Dispatchers.IO) {
+            resolveNextEpisode(item)
+        }
     }
 
     private fun mediaSourceFor(
@@ -457,7 +592,7 @@ class PlayerEngine(
                     MediaItem.SubtitleConfiguration.Builder(Uri.parse(subtitle.url))
                         .setMimeType(subtitleMimeType(subtitle.label))
                         .setLabel(subtitle.label)
-                        .setLanguage(subtitle.label.substringBefore('.').take(8))
+                        .setLanguage(subtitleLanguageHint(subtitle.label))
                         .build()
                 },
             )
@@ -487,6 +622,9 @@ class PlayerEngine(
             _state.value = _state.value.copy(error = VpnRequiredMessage.playback, preparing = false)
             return
         }
+        if (session.kind == StreamKind.TORRENT && torrentManager.state.value.paused) {
+            torrentManager.resume()
+        }
         _state.value = _state.value.copy(error = null, preparing = true)
         player.prepare()
         player.playWhenReady = true
@@ -502,6 +640,9 @@ class PlayerEngine(
             ) {
                 _state.value = _state.value.copy(error = VpnRequiredMessage.playback)
                 return
+            }
+            if (session != null && session.kind == StreamKind.TORRENT && torrentManager.state.value.paused) {
+                torrentManager.resume()
             }
             player.play()
         }
@@ -520,8 +661,14 @@ class PlayerEngine(
             duration > 0 -> positionMs.coerceAtMost(duration)
             else -> positionMs
         }
+        autoplayJob?.cancel()
+        autoplayJob = null
         player.seekTo(clamped)
-        _state.value = _state.value.copy(positionMs = clamped, ended = false)
+        _state.value = _state.value.copy(
+            positionMs = clamped,
+            ended = false,
+            autoplayCountdownSeconds = null,
+        )
     }
 
     fun seekBy(deltaMs: Long) {
@@ -535,11 +682,23 @@ class PlayerEngine(
      */
     fun selectSubtitle(index: Int) {
         if (index < 0) {
+            userClearedSubtitles = true
+            applySubtitleOverride(-1)
+            _state.value = _state.value.copy(selectedSubtitle = -1)
+            return
+        }
+        if (index !in textGroups.indices) return
+        userClearedSubtitles = false
+        applySubtitleOverride(index)
+        _state.value = _state.value.copy(selectedSubtitle = index)
+    }
+
+    private fun applySubtitleOverride(index: Int) {
+        if (index < 0) {
             player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
                 .clearOverridesOfType(C.TRACK_TYPE_TEXT)
                 .build()
-            _state.value = _state.value.copy(selectedSubtitle = -1)
             return
         }
         val group = textGroups.getOrNull(index) ?: return
@@ -548,17 +707,58 @@ class PlayerEngine(
             .clearOverridesOfType(C.TRACK_TYPE_TEXT)
             .addOverride(TrackSelectionOverride(group.mediaTrackGroup, 0))
             .build()
-        _state.value = _state.value.copy(selectedSubtitle = index)
+    }
+
+    fun selectAudioTrack(index: Int) {
+        val group = audioGroups.getOrNull(index) ?: return
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false)
+            .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+            .addOverride(TrackSelectionOverride(group.mediaTrackGroup, 0))
+            .build()
+        _state.value = _state.value.copy(selectedAudioTrack = index)
+    }
+
+    fun setPlaybackSpeed(speed: Float) {
+        val clamped = speed.coerceIn(0.5f, 2.0f)
+        player.setPlaybackSpeed(clamped)
+        _state.value = _state.value.copy(playbackSpeed = clamped)
+    }
+
+    fun cancelAutoplay() {
+        autoplayJob?.cancel()
+        autoplayJob = null
+        _state.value = _state.value.copy(autoplayCountdownSeconds = null)
+    }
+
+    fun playNextNow() {
+        autoplayJob?.cancel()
+        autoplayJob = null
+        _state.value = _state.value.copy(autoplayCountdownSeconds = null)
+        val nextFile = torrentManager.nextPlayableFileIndex()
+        if (active?.kind == StreamKind.TORRENT && nextFile != null) {
+            switchTorrentFile(nextFile)
+            return
+        }
+        val nextId = _state.value.nextEpisodeId ?: return
+        scope.launch {
+            val nextItem = withContext(Dispatchers.IO) { library.find(nextId) } ?: return@launch
+            play(nextItem, startOverrideMs = 0L)
+        }
     }
 
     fun stop(saveProgress: Boolean = true) {
         playJob?.cancel()
         playJob = null
+        autoplayJob?.cancel()
+        autoplayJob = null
         val session = active
         if (session != null) {
+            val completed = player.playbackState == Player.STATE_ENDED
             if (saveProgress) {
-                saveProgress(completed = player.playbackState == Player.STATE_ENDED)
+                saveProgress(completed = completed)
             }
+            recordWatchEvent(session, completed = completed)
             persistSessionSummary(session)
         }
         if (session?.kind == StreamKind.TORRENT) {
@@ -567,15 +767,23 @@ class PlayerEngine(
         }
         player.stop()
         player.clearMediaItems()
+        player.setPlaybackSpeed(1.0f)
         active = null
         pendingSubtitles = emptyList()
         textGroups = emptyList()
+        audioGroups = emptyList()
+        autoSelectedSubtitlesForItem = false
+        userClearedSubtitles = false
         _state.value = PlayerUiState()
         _stats.value = PlaybackStatsUi()
     }
 
     fun release() {
         if (active != null) stop(saveProgress = true)
+        controllerFuture?.let { future ->
+            runCatching { MediaController.releaseFuture(future) }
+        }
+        controllerFuture = null
         runCatching { player.removeListener(playerListener) }
         runCatching { player.removeAnalyticsListener(analyticsListener) }
         runCatching { session.release() }
@@ -782,12 +990,174 @@ class PlayerEngine(
             scheme == "asset"
     }
 
+    private fun cleanupPreviousSessionBeforeSwitch(switchingToTorrent: Boolean) {
+        val prev = active ?: return
+        val completed = player.playbackState == Player.STATE_ENDED
+        saveProgress(completed = completed)
+        recordWatchEvent(prev, completed = completed)
+        persistSessionSummary(prev)
+        if (prev.kind == StreamKind.TORRENT) {
+            torrentManager.setOptimizerAhead(null)
+            if (!switchingToTorrent) {
+                torrentManager.stop()
+            }
+        }
+        active = null
+    }
+
+    private fun ensureSessionServiceConnected() {
+        val existing = controllerFuture
+        if (existing != null && (!existing.isDone || runCatching { existing.get().isConnected }.getOrDefault(false))) {
+            return
+        }
+        existing?.let { runCatching { MediaController.releaseFuture(it) } }
+        runCatching {
+            val token = SessionToken(context, ComponentName(context, PlaybackService::class.java))
+            val future = MediaController.Builder(context, token).buildAsync()
+            controllerFuture = future
+            future.addListener(
+                {
+                    runCatching {
+                        if (!future.get().isConnected) {
+                            controllerFuture = null
+                        }
+                    }.onFailure {
+                        controllerFuture = null
+                    }
+                },
+                ContextCompat.getMainExecutor(context),
+            )
+        }
+    }
+
+    private fun recordWatchEvent(session: Active, completed: Boolean) {
+        if (session.watchRecorded) return
+        val watchedMs = maxOf(
+            analytics.sessionDurationMs(),
+            (player.currentPosition - session.initialStartMs).coerceAtLeast(0L),
+        )
+        val durationMs = (player.duration.takeIf { it > 0 } ?: session.item.durationMs).coerceAtLeast(0L)
+        if (!completed && watchedMs < 3_000L) return
+        session.watchRecorded = true
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                SmartPrefetch.recordPlayback(
+                    context,
+                    WatchEvent(
+                        streamId = session.item.id,
+                        title = session.item.title,
+                        startedAtMs = session.startedAt,
+                        watchedMs = watchedMs,
+                        durationMs = durationMs,
+                        completed = completed,
+                    ),
+                )
+            }
+        }
+    }
+
+    private suspend fun resolveNextEpisode(item: LibraryItem) {
+        val currentParsed = SeriesMatcher.parse(item.title)
+        if (!currentParsed.hasEpisode) return
+        val items = runCatching { library.allOnce() }.getOrDefault(emptyList())
+        val next = items.firstOrNull { candidate ->
+            candidate.id != item.id &&
+                candidate.hasSource &&
+                SeriesMatcher.isNextEpisode(SeriesMatcher.parse(candidate.title), currentParsed)
+        } ?: return
+        withContext(Dispatchers.Main.immediate) {
+            if (active?.item?.id == item.id) {
+                _state.value = _state.value.copy(
+                    nextEpisodeId = next.id,
+                    nextEpisodeTitle = next.title,
+                )
+            }
+        }
+    }
+
+    private fun maybeStartAutoplayCountdown() {
+        if (!settingsStore.current().autoplayNextEpisode) return
+        val hasNextTorrentFile = active?.kind == StreamKind.TORRENT &&
+            torrentManager.nextPlayableFileIndex() != null
+        val hasNextLibraryEpisode = _state.value.nextEpisodeId != null
+        if (!hasNextTorrentFile && !hasNextLibraryEpisode) return
+        autoplayJob?.cancel()
+        autoplayJob = scope.launch {
+            for (sec in AUTOPLAY_COUNTDOWN_SECONDS downTo 1) {
+                _state.value = _state.value.copy(autoplayCountdownSeconds = sec)
+                delay(1_000L)
+            }
+            _state.value = _state.value.copy(autoplayCountdownSeconds = null)
+            playNextNow()
+        }
+    }
+
     private fun subtitleLabel(group: Tracks.Group): String {
         val format = group.getTrackFormat(0)
         return format.label
             ?: format.language
             ?: format.sampleMimeType?.substringAfterLast('/')?.uppercase()
             ?: "Subtitle"
+    }
+
+    private fun audioLabel(group: Tracks.Group, index: Int): String {
+        val format = group.getTrackFormat(0)
+        val lang = format.language?.let { code ->
+            runCatching { Locale.forLanguageTag(code).displayLanguage }
+                .getOrNull()
+                ?.takeIf { it.isNotBlank() && !it.equals("und", ignoreCase = true) }
+                ?: code
+        }
+        val channels = when (format.channelCount) {
+            1 -> "Mono"
+            2 -> "Stereo"
+            6 -> "5.1"
+            8 -> "7.1"
+            else -> format.channelCount.takeIf { it > 0 }?.let { "${it}ch" }
+        }
+        val base = listOfNotNull(format.label?.takeIf { it.isNotBlank() }, lang, channels)
+            .distinct()
+            .joinToString(" · ")
+        return base.ifBlank { "Audio ${index + 1}" }
+    }
+
+    private fun findPreferredSubtitleIndex(
+        preferredRaw: String,
+        groups: List<Tracks.Group>,
+        derived: List<SubtitleOption>,
+    ): Int {
+        val pref = preferredRaw.trim().lowercase(Locale.US)
+        if (pref.isEmpty()) return -1
+        val prefLocale = runCatching { Locale.forLanguageTag(pref) }.getOrNull()
+        val iso3 = runCatching { prefLocale?.isO3Language?.lowercase(Locale.US) }.getOrNull().orEmpty()
+        val displayLang = runCatching { prefLocale?.getDisplayLanguage(Locale.US)?.lowercase(Locale.US) }.getOrNull().orEmpty()
+        val needles = setOf(pref, iso3, displayLang).filter { it.isNotBlank() }
+
+        for (index in groups.indices) {
+            val format = groups[index].getTrackFormat(0)
+            val lang = format.language?.lowercase(Locale.US).orEmpty()
+            val langDisplay = if (lang.isNotBlank()) {
+                runCatching { Locale.forLanguageTag(lang).getDisplayLanguage(Locale.US).lowercase(Locale.US) }
+                    .getOrDefault("")
+            } else {
+                ""
+            }
+            val label = (format.label ?: derived.getOrNull(index)?.label).orEmpty().lowercase(Locale.US)
+            if (needles.any { n -> lang == n || lang.startsWith("$n-") || langDisplay == n || label == n }) {
+                return index
+            }
+            val tokens = label.split('.', '_', '-', ' ', '(', ')').filter { it.isNotBlank() }
+            if (needles.any { n -> n in tokens }) {
+                return index
+            }
+        }
+        return -1
+    }
+
+    private fun subtitleLanguageHint(label: String): String {
+        val stem = label.substringBeforeLast('.', label)
+        val candidate = stem.substringAfterLast('.', stem).trim()
+        return candidate.take(8).ifBlank { "und" }
     }
 
     private fun subtitleMimeType(label: String): String = when (
@@ -802,6 +1172,7 @@ class PlayerEngine(
     private companion object {
         const val PROGRESS_SAVE_MS = 5_000L
         const val CACHE_SAMPLE_MS = 5_000L
+        const val AUTOPLAY_COUNTDOWN_SECONDS = 5
         const val TORRENT_FILE_SCHEME = "torrent-file://"
     }
 }

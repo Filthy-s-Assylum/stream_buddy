@@ -336,6 +336,7 @@ dependencies {
     // Unit tests (JVM)
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+    testImplementation("org.json:json:20240303")
 
     // Instrumented tests (device / emulator)
     androidTestImplementation(composeBom)

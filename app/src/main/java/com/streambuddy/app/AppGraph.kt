@@ -1,6 +1,7 @@
 package com.streambuddy.app
 
 import android.content.Context
+import com.streambuddy.app.cache.LibraryPreCacher
 import com.streambuddy.app.data.AppDb
 import com.streambuddy.app.data.LibraryRepository
 import com.streambuddy.app.data.SettingsStore
@@ -39,6 +40,7 @@ class AppContainer(context: Context) {
     val optimizerRuntime = OptimizerRuntime(appContext, settingsStore, db)
     val securityCenter = SecurityCenter(appContext, settingsStore)
     val torrentManager = TorrentManager(appContext, settingsStore, vpnMonitor, securityCenter)
+    val libraryPreCacher = LibraryPreCacher(appContext, settingsStore, libraryRepository)
     val playerEngine = PlayerEngine(
         context = appContext,
         settingsStore = settingsStore,
@@ -72,6 +74,7 @@ class AppContainer(context: Context) {
         scope.cancel()
         NetworkGuard.clear()
         runCatching { playerEngine.release() }
+        runCatching { libraryPreCacher.release() }
         runCatching { torrentManager.release() }
         runCatching { securityCenter.release() }
         runCatching { vpnMonitor.release() }

@@ -3,8 +3,10 @@ package com.streambuddy.app
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -23,6 +25,7 @@ class MainActivity : ComponentActivity() {
 
     private var pendingShared by mutableStateOf<SharedSource?>(null)
     private var pendingTab by mutableStateOf<AppTab?>(null)
+    private var pendingOpenPlayer by mutableStateOf(false)
 
     private val notificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -50,6 +53,8 @@ class MainActivity : ComponentActivity() {
                 onSharedSourceHandled = { pendingShared = null },
                 requestedTab = pendingTab,
                 onRequestedTabHandled = { pendingTab = null },
+                requestedOpenPlayer = pendingOpenPlayer,
+                onRequestedOpenPlayerHandled = { pendingOpenPlayer = false },
             )
         }
         requestNotificationPermission()
@@ -67,13 +72,24 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
-        val shortcutTab = extractShortcutTab(intent)
-        if (shortcutTab != null) {
-            pendingTab = shortcutTab
-            pendingShared = null
-        } else {
-            pendingShared = extractShared(intent)
+        val data = intent?.data
+        if (intent?.action == Intent.ACTION_VIEW &&
+            data != null &&
+            data.scheme.equals("streambuddy", ignoreCase = true)
+        ) {
+            if (data.host.equals("player", ignoreCase = true)) {
+                pendingOpenPlayer = true
+                pendingShared = null
+                return
+            }
+            val shortcutTab = extractShortcutTab(intent)
+            if (shortcutTab != null) {
+                pendingTab = shortcutTab
+                pendingShared = null
+                return
+            }
         }
+        pendingShared = extractShared(intent)
     }
 
     private fun requestNotificationPermission() {
@@ -96,7 +112,10 @@ class MainActivity : ComponentActivity() {
         if (!data.scheme.equals("streambuddy", ignoreCase = true)) return null
         return when (data.host?.lowercase()) {
             "settings" -> AppTab.SETTINGS
-            "queue" -> AppTab.LIBRARY
+            "queue", "library" -> AppTab.LIBRARY
+            "browser" -> AppTab.BROWSER
+            "apps" -> AppTab.APPS
+            "storage", "downloads" -> AppTab.STORAGE
             else -> null
         }
     }
@@ -118,7 +137,11 @@ class MainActivity : ComponentActivity() {
                                 Intent.FLAG_GRANT_READ_URI_PERMISSION,
                             )
                         }
-                        SharedSource(value, data.lastPathSegment)
+                        val label = resolveUriName(data) ?: data.lastPathSegment
+                        val isTorrent = intent.type.equals("application/x-bittorrent", ignoreCase = true) ||
+                            label?.endsWith(".torrent", ignoreCase = true) == true ||
+                            value.substringBefore('?').endsWith(".torrent", ignoreCase = true)
+                        SharedSource(value, label, isTorrentFile = isTorrent)
                     }
 
                     value.startsWith("http://", true) || value.startsWith("https://", true) ->
@@ -143,6 +166,12 @@ class MainActivity : ComponentActivity() {
             else -> null
         }
     }
+
+    private fun resolveUriName(uri: Uri): String? = runCatching {
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        }
+    }.getOrNull()
 
     private companion object {
         val MAGNET_PATTERN = Regex("magnet:\\?[^\\s]+", RegexOption.IGNORE_CASE)

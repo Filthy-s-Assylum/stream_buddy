@@ -52,6 +52,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.streambuddy.app.ai.Prediction
+import com.streambuddy.app.cache.LibraryPreCacheState
 import com.streambuddy.app.data.LibraryFilters
 import com.streambuddy.app.data.LibraryItem
 import com.streambuddy.app.data.LibraryQuery
@@ -59,6 +61,7 @@ import com.streambuddy.app.data.LibrarySort
 import com.streambuddy.app.data.LibraryStatus
 import com.streambuddy.app.data.MediaType
 import com.streambuddy.app.metadata.TmdbImages
+import com.streambuddy.app.stream.CacheState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -68,6 +71,8 @@ fun LibraryScreen(
     onPlay: (LibraryItem) -> Unit,
     onAdd: () -> Unit,
     vpnWarning: String? = null,
+    predictions: Map<Long, Prediction> = emptyMap(),
+    preCacheStates: Map<Long, LibraryPreCacheState> = emptyMap(),
     contentPadding: androidx.compose.foundation.layout.PaddingValues = androidx.compose.foundation.layout.PaddingValues(0.dp),
 ) {
     var query by remember { mutableStateOf(LibraryQuery()) }
@@ -78,7 +83,7 @@ fun LibraryScreen(
     val genres = remember(items) { LibraryFilters.genres(items) }
     val networks = remember(items) { LibraryFilters.networks(items) }
     val showingEverything = query.text.isBlank() && query.mediaType == null &&
-        query.genre == null && query.network == null && query.status == null
+        query.genre == null && query.network == null && query.status == null && !query.onlyWithSource
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -182,6 +187,11 @@ fun LibraryScreen(
                         label = { Text(status.label) },
                     )
                 }
+                FilterChip(
+                    selected = query.onlyWithSource,
+                    onClick = { query = query.copy(onlyWithSource = !query.onlyWithSource) },
+                    label = { Text("Has source") },
+                )
             }
 
             if (genres.isNotEmpty() || networks.isNotEmpty()) {
@@ -268,7 +278,13 @@ fun LibraryScreen(
                         }
                     }
                     items(filtered, key = { it.id }) { item ->
-                        PosterCard(item = item, onClick = { onOpen(item) }, onPlay = { onPlay(item) })
+                        PosterCard(
+                            item = item,
+                            prediction = predictions[item.id],
+                            preCache = preCacheStates[item.id],
+                            onClick = { onOpen(item) },
+                            onPlay = { onPlay(item) },
+                        )
                     }
                 }
             }
@@ -323,7 +339,13 @@ private fun ContinueWatchingCard(item: LibraryItem, onClick: () -> Unit) {
 }
 
 @Composable
-fun PosterCard(item: LibraryItem, onClick: () -> Unit, onPlay: (() -> Unit)? = null) {
+fun PosterCard(
+    item: LibraryItem,
+    prediction: Prediction? = null,
+    preCache: LibraryPreCacheState? = null,
+    onClick: () -> Unit,
+    onPlay: (() -> Unit)? = null,
+) {
     Column(
         modifier = Modifier.clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick),
     ) {
@@ -350,6 +372,32 @@ fun PosterCard(item: LibraryItem, onClick: () -> Unit, onPlay: (() -> Unit)? = n
                         .padding(horizontal = 6.dp, vertical = 3.dp),
                 ) {
                     Text("No source", style = MaterialTheme.typography.labelSmall, color = Color(0xFFFFC857))
+                }
+            } else if (preCache != null && preCache.state in setOf(CacheState.CACHING, CacheState.READY)) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xCC0D1117))
+                        .padding(horizontal = 6.dp, vertical = 3.dp),
+                ) {
+                    Text(
+                        if (preCache.state == CacheState.READY) "Pre-cached" else "Caching…",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
+            } else if (prediction != null && prediction.probability >= 0.50 && prediction.reasons.isNotEmpty()) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(6.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xCC0D1117))
+                        .padding(horizontal = 6.dp, vertical = 3.dp),
+                ) {
+                    Text("Likely next", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 }
             }
             if (item.status == LibraryStatus.WATCHLIST) {

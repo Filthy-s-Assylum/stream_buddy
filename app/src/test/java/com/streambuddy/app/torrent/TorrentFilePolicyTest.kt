@@ -144,13 +144,37 @@ class TorrentFilePolicyTest {
     }
 
     @Test
+    fun `chooses quality-appropriate main file when requested`() {
+        val files = listOf(
+            file("Movie.720p.mkv", 1_500, FileKind.VIDEO, index = 0),
+            file("Movie.1080p.mkv", 3_000, FileKind.VIDEO, index = 1),
+            file("Movie.2160p.4K.mkv", 9_000, FileKind.VIDEO, index = 2),
+        )
+        assertEquals("Movie.2160p.4K.mkv", TorrentFilePolicy.chooseMainFile(files, preferHighestQuality = true)?.path)
+        assertEquals("Movie.1080p.mkv", TorrentFilePolicy.chooseMainFile(files, preferHighestQuality = false, targetHeightPx = 1080)?.path)
+    }
+
+    @Test
+    fun `playableMediaFiles excludes samples and rejected files and sorts naturally`() {
+        val files = listOf(
+            file("Show.S01E02.mkv", 1_000, FileKind.VIDEO, index = 2),
+            file("Show.S01E01.sample.mkv", 50, FileKind.VIDEO, index = 0),
+            file("Show.S01E01.mkv", 1_000, FileKind.VIDEO, index = 1),
+            file("../escape.mkv", 2_000, FileKind.VIDEO, index = 3).copy(safePath = null, rejection = "traversal"),
+            file("readme.txt", 10, FileKind.OTHER, index = 4),
+        )
+        val playable = TorrentFilePolicy.playableMediaFiles(files)
+        assertEquals(listOf("Show.S01E01.mkv", "Show.S01E02.mkv"), playable.map { it.path })
+    }
+
+    @Test
     fun `blank torrent name still yields a directory`() {
         assertEquals("abcdef0123456789-torrent", TorrentFilePolicy.safeDirectoryName("ABCDEF0123456789", "   "))
         assertEquals("abcdef0123456789-torrent", TorrentFilePolicy.safeDirectoryName("abcdef0123456789", null))
     }
 
-    private fun file(path: String, size: Long, kind: FileKind) = SafeTorrentFile(
-        index = 0,
+    private fun file(path: String, size: Long, kind: FileKind, index: Int = 0) = SafeTorrentFile(
+        index = index,
         path = path,
         size = size,
         safePath = path,

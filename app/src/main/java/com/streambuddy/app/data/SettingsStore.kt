@@ -51,6 +51,7 @@ data class AppSettings(
             tmdbApiKey = tmdbApiKey.trim().take(200),
             motnApiKey = motnApiKey.trim().take(200),
             motnCountry = motnCountry.trim().lowercase().filter { it.isLetter() }.take(2).ifBlank { "us" },
+            preferredSubtitleLanguage = preferredSubtitleLanguage.trim().take(16),
         )
     }
 

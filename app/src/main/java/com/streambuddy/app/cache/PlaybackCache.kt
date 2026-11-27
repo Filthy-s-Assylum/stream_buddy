@@ -5,10 +5,14 @@ import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.cache.Cache
+import androidx.media3.datasource.cache.CacheDataSink
+import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.CacheEvictor
 import androidx.media3.datasource.cache.CacheSpan
 import androidx.media3.datasource.cache.SimpleCache
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import com.streambuddy.app.core.Fmt
+import com.streambuddy.app.net.Http
 import java.io.File
 import java.util.TreeSet
 
@@ -161,6 +165,29 @@ object PlaybackCache {
         }
         return CacheUsage(bytes, resources, currentMaxBytes)
     }
+
+    /**
+     * CacheDataSource.Factory writing into the same [PlaybackCache] that
+     * PlayerEngine reads from, routed through [Http.mediaClient] (VPN gate).
+     */
+    fun dataSourceFactory(context: Context, maxBytes: Long = currentMaxBytes): CacheDataSource.Factory {
+        val active = get(context, maxBytes)
+        val upstream = OkHttpDataSource.Factory(Http.mediaClient)
+            .setUserAgent(Http.USER_AGENT)
+        return CacheDataSource.Factory()
+            .setCache(active)
+            .setUpstreamDataSourceFactory(upstream)
+            .setCacheWriteDataSinkFactory(CacheDataSink.Factory().setCache(active))
+            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+    }
+
+    fun cachedBytesForKey(context: Context, key: String, maxBytes: Long = currentMaxBytes): Long =
+        runCatching {
+            val active = get(context, maxBytes)
+            active.getCachedSpans(key)
+                .filter { it.isCached }
+                .sumOf { it.length.coerceAtLeast(0L) }
+        }.getOrDefault(0L)
 
     /**
      * Drops evictable cached media. The caller must stop playback first; the

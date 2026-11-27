@@ -49,24 +49,21 @@
             </intent-filter>
 
             <!--
-              Deep links used by the launcher shortcuts: streambuddy://queue and
-              streambuddy://settings.
+              Deep links used by launcher shortcuts and navigation routes:
+              streambuddy://queue, library, browser, apps, storage, player, settings.
             -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data
-                    android:host="queue"
-                    android:scheme="streambuddy" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data
-                    android:host="settings"
-                    android:scheme="streambuddy" />
+                <data android:scheme="streambuddy" />
+                <data android:host="queue" />
+                <data android:host="library" />
+                <data android:host="browser" />
+                <data android:host="apps" />
+                <data android:host="storage" />
+                <data android:host="player" />
+                <data android:host="settings" />
             </intent-filter>
 
             <!-- A magnet: link handed over by a browser, another app or a deep link. -->
@@ -77,11 +74,13 @@
                 <data android:scheme="magnet" />
             </intent-filter>
 
-            <!-- Local videos opened from a file manager (content:// and file:// are implied). -->
+            <!-- Local videos, audio, and .torrent files opened from a file manager. -->
             <intent-filter tools:ignore="AppLinkUrlError">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="video/*" />
+                <data android:mimeType="audio/*" />
+                <data android:mimeType="application/x-bittorrent" />
             </intent-filter>
 
             <!-- Share a stream URL from a browser or another app straight into the queue. -->

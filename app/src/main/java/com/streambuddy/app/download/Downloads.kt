@@ -32,6 +32,7 @@ object Downloads {
     const val CHANNEL_ID = "sb_downloads"
     const val FOREGROUND_NOTIFICATION_ID = 4102
     const val FOREGROUND_UPDATE_MS = 1_000L
+    const val STOP_REASON_USER = 1
 
     private val executor: Executor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "sb-downloads").apply { isDaemon = true }
@@ -115,11 +116,31 @@ object Downloads {
         SbDownloadService.sendRemoveDownload(context, id, true)
     }
 
+    fun pause(context: Context, id: String) {
+        SbDownloadService.sendSetStopReason(context, id, STOP_REASON_USER, true)
+    }
+
+    fun resume(context: Context, id: String) {
+        NetworkGuard.check()
+        SbDownloadService.sendSetStopReason(context, id, Download.STOP_REASON_NONE, true)
+    }
+
+    fun retry(context: Context, download: Download) {
+        NetworkGuard.check()
+        val request = DownloadRequest.Builder(download.request.id, download.request.uri)
+            .setMimeType(download.request.mimeType)
+            .setCustomCacheKey(download.request.customCacheKey ?: download.request.uri.toString())
+            .setData(download.request.data)
+            .build()
+        SbDownloadService.sendAddDownload(context, request, true)
+    }
+
     fun pauseAll(context: Context) {
         SbDownloadService.sendPauseDownloads(context, true)
     }
 
     fun resumeAll(context: Context) {
+        NetworkGuard.check()
         SbDownloadService.sendResumeDownloads(context, true)
     }
 
